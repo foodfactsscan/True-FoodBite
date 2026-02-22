@@ -371,6 +371,42 @@ export const getBMICategory = (bmi) => {
  * @param {Object} userProfile - User's health profile
  * @returns {Object} Personalized analysis with concerns and benefits
  */
+export const calculateDailyRecommendations = (userProfile) => {
+    if (!userProfile || !userProfile.weightKg) {
+        // Defaults for average adult
+        return { calories: 2000, sugar: 50, salt: 6, protein: 50 };
+    }
+
+    const { weightKg, heightCm, age, gender, goal } = userProfile;
+
+    // Basal Metabolic Rate (Mifflin-St Jeor Equation)
+    let bmr = (10 * weightKg) + (6.25 * (heightCm || 170)) - (5 * (age || 30));
+    if (gender === 'male') bmr += 5;
+    else bmr -= 161;
+
+    // TDEE (Sedentary factor 1.2)
+    let tdee = bmr * 1.2;
+
+    // Adjust based on goal
+    if (goal === 'weight-loss') tdee -= 500;
+    if (goal === 'weight-gain' || goal === 'muscle-building') tdee += 500;
+
+    // Nutrients (Standard recommendations)
+    // Sugar: < 10% of total calories (1g sugar = 4kcal)
+    const sugarLimit = (tdee * 0.1) / 4;
+    // Protein: 0.8g to 1.5g per kg
+    const proteinTarget = goal === 'muscle-building' ? weightKg * 1.6 : weightKg * 1.0;
+    // Salt: < 6g (WHO recommendation)
+    const saltLimit = 6;
+
+    return {
+        calories: Math.round(Math.max(1200, tdee)),
+        sugar: Math.round(sugarLimit),
+        salt: saltLimit,
+        protein: Math.round(proteinTarget)
+    };
+};
+
 export const analyzeProductForUser = (product, userProfile) => {
     if (!product || !userProfile) return null;
 

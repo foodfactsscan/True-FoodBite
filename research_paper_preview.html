@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FactsScan: Research Paper Preview</title>
+    <style>
+        body { font-family: 'Times New Roman', Times, serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; background: #f9f9f9; }
+        .paper { background: white; padding: 40px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; font-size: 24px; margin-bottom: 5px; }
+        .authors { text-align: center; margin-bottom: 30px; font-style: italic; }
+        .abstract { margin: 20px 0; font-style: italic; background: #eee; padding: 15px; }
+        h2 { border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 30px; }
+        ul { margin-bottom: 15px; }
+        .keywords { font-weight: bold; margin-bottom: 20px; }
+    </style>
+</head>
+<body>
+
+<div class="paper">
+    <h1>FactsScan: AI-Powered Nutritional Transparency for the Indian Packaged Food Market</h1>
+    
+    <div class="authors">
+        Harshal Unde, Vanita Mane, Tushar Ghorpade<br>
+        Department of Computer Engineering<br>
+        D. Y. Patil Deemed to be University, Navi Mumbai, India
+    </div>
+
+    <div class="abstract">
+        <strong>Abstract:</strong> As the consumption of packaged foods rises in India, so does the complexity of nutritional labels, often confusing consumers with technical jargon and hidden ingredients. This paper presents "FactsScan," a web-based application designed to bridge the gap between complex food labels and consumer understanding. Leveraging modern web technologies (React.js, Node.js) and AI-driven analysis, FactsScan allows users to scan product barcodes to instantly retrieve simplified nutritional insights, health scores, and safer alternatives. Unlike existing global solutions, FactsScan is specifically tailored for the Indian market, addressing local brands and dietary habits.
+    </div>
+
+    <div class="keywords">Keywords: Food Safety, OCR, Barcode Scanning, AI, MERN Stack, Nutritional Analysis, Indian Food Market.</div>
+
+    <h2>I. Introduction</h2>
+    <p>The rapid urbanization of India has led to a significant shift in dietary patterns, with a marked increase in the consumption of processed and packaged foods. While convenient, these products often contain high levels of sugar, sodium, and preservatives that are detrimental to long-term health. Although the Food Safety and Standards Authority of India (FSSAI) mandates nutritional labeling, the information provided is often dense, technical, and difficult for the average consumer to interpret quickly.</p>
+    <p>Existing solutions like OpenFoodFacts or Yuka are popular globally but often lack comprehensive data on indigenous Indian products or fail to account for local dietary context. "FactsScan" addresses this limitation by building a dedicated platform for Indian consumers.</p>
+
+    <h2>II. System Architecture</h2>
+    <p>The FactsScan architecture follows a modern client-server model, ensuring scalability and cross-platform accessibility.</p>
+    
+    <h3>A. Frontend (Client-Side)</h3>
+    <p>The user interface is built using <strong>React.js</strong> (v19) and <strong>Vite</strong>. Key components include:</p>
+    <ul>
+        <li><strong>Scanner Module:</strong> Integrates <code>html5-qrcode</code> and <code>@zxing/library</code> for robust barcode detection directly within the browser.</li>
+        <li><strong>Visualization:</strong> Uses <code>Framer Motion</code> for fluid animations and dynamic charts (e.g., Donut charts for macronutrients).</li>
+        <li><strong>History & Profile:</strong> A personalized dashboard where users can track their scan history and health patterns.</li>
+    </ul>
+
+    <h3>B. Backend (Server-Side)</h3>
+    <p>The backend is powered by <strong>Node.js</strong> and <strong>Express.js</strong>.</p>
+    <ul>
+        <li><strong>Database:</strong> <strong>MongoDB</strong> stores product data, user profiles, and scan history.</li>
+        <li><strong>Authentication:</strong> Secure user sessions are managed via <strong>JWT</strong>.</li>
+    </ul>
+
+    <h2>III. Key Features</h2>
+    <ul>
+        <li><strong>Real-time Barcode Scanning:</strong> Supports EAN-13 and UPC barcodes with high accuracy.</li>
+        <li><strong>Localized Indian Database:</strong> Focuses on Indian manufacturers (Balaji, Amul, Britannia).</li>
+        <li><strong>Nutrient Visualization:</strong> Color-coded badges and charts.</li>
+        <li><strong>Healthier Alternatives:</strong> Recommends better products in the same category.</li>
+    </ul>
+
+    <h2>IV. Conclusion</h2>
+    <p>FactsScan effectively demonstrates how technology can democratize nutritional information. By tailoring the solution to the Indian market, we address a significant gap in public health awareness.</p>
+</div>
+
+</body>
+</html>

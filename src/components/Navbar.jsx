@@ -33,6 +33,8 @@ const Navbar = () => {
                 <div style={{ display: 'flex', gap: '2rem', alignItems: 'center' }}>
                     <Link to="/" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Home</Link>
                     <Link to="/scan" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Scanner</Link>
+                    <Link to="/compare" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Compare</Link>
+                    <Link to="/dashboard" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Dashboard</Link>
                     <Link to="/how-it-works" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>How It Works</Link>
 
                     <button
@@ -118,6 +120,27 @@ const Navbar = () => {
                                     >
                                         <User size={18} />
                                         My Profile
+                                    </Link>
+                                    <Link
+                                        to="/dashboard"
+                                        onClick={() => setShowUserMenu(false)}
+                                        style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '0.5rem',
+                                            padding: '0.75rem',
+                                            color: 'var(--color-text)',
+                                            textDecoration: 'none',
+                                            fontSize: '0.9rem',
+                                            fontWeight: '500',
+                                            transition: 'background 0.2s',
+                                            borderRadius: 'var(--radius-md)'
+                                        }}
+                                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                    >
+                                        <Activity size={18} />
+                                        Dashboard
                                     </Link>
                                     <button
                                         onClick={handleLogout}

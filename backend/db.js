@@ -89,6 +89,9 @@ class JsonDB {
 // Create database instances
 const usersDB = new JsonDB('users');
 const profilesDB = new JsonDB('profiles');
+const ingredientsDB = new JsonDB('ingredients');
+const flaggedDB = new JsonDB('flagged_substances');
+const adminLogDB = new JsonDB('admin_log');
 
-export { usersDB, profilesDB, JsonDB };
-export default { usersDB, profilesDB };
+export { usersDB, profilesDB, ingredientsDB, flaggedDB, adminLogDB, JsonDB };
+export default { usersDB, profilesDB, ingredientsDB, flaggedDB, adminLogDB };

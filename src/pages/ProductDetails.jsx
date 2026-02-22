@@ -15,13 +15,19 @@ import DetailedNutrients from '../components/DetailedNutrients';
 import BetterRatedOptions from '../components/BetterRatedOptions';
 import AllNutrientsSheet from '../components/AllNutrientsSheet';
 import PersonalizedAnalysis from '../components/PersonalizedAnalysis';
+import HealthScoreCard from '../components/HealthScoreCard';
+import LabelInterpreter from '../components/LabelInterpreter';
+import RecipeSuggestions from '../components/RecipeSuggestions';
+import ProductIngredientAnalysis from '../components/ProductIngredientAnalysis';
 import { useAuth } from '../context/AuthContext';
 import historyService from '../services/historyService';
+import UserTracker from '../components/UserTracker';
 
 const ProductDetails = () => {
     const { barcode } = useParams();
     const [product, setProduct] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
     const [alternatives, setAlternatives] = useState([]);
     const [detectedAllergens, setDetectedAllergens] = useState([]);
     const [truthInRating, setTruthInRating] = useState(null);
@@ -45,6 +51,9 @@ const ProductDetails = () => {
                     const found = data.product.allergens_tags.map(tag => tag.replace('en:', '').replace('fr:', ''));
                     setDetectedAllergens(found);
                 }
+
+                // Log to history
+                historyService.addToHistory(data.product);
 
 
                 // Fetch Healthier Alternatives - with robust Indian product fallback
@@ -154,10 +163,19 @@ const ProductDetails = () => {
     }, [barcode]);
 
     useEffect(() => {
-        if (product && isAuthenticated && !authLoading) {
+        const handleStatus = () => setIsOffline(!navigator.onLine);
+        window.addEventListener('online', handleStatus);
+        window.addEventListener('offline', handleStatus);
+
+        if (product && isAuthenticated && !authLoading && navigator.onLine) {
             // Add to history silently
             historyService.addToHistory(product).catch(err => console.error('History sync error:', err));
         }
+
+        return () => {
+            window.removeEventListener('online', handleStatus);
+            window.removeEventListener('offline', handleStatus);
+        };
     }, [product, isAuthenticated, authLoading]);
 
     if (loading) {
@@ -323,7 +341,28 @@ const ProductDetails = () => {
                                     🤖 AI Generated
                                 </span>
                             )}
+                            {isOffline && (
+                                <span style={{
+                                    padding: '0.35rem 0.9rem',
+                                    borderRadius: '20px',
+                                    background: 'rgba(255, 255, 255, 0.1)',
+                                    color: 'var(--color-text-muted)',
+                                    fontSize: '0.75rem',
+                                    fontWeight: '700',
+                                    border: '1px solid rgba(255, 255, 255, 0.2)',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.4rem'
+                                }}>
+                                    📦 Cached Data
+                                </span>
+                            )}
                         </div>
+                        {isOffline && (
+                            <p style={{ fontSize: '0.85rem', color: '#ef4444', marginTop: '0.5rem', marginBottom: '0' }}>
+                                ⚠️ You are viewing this product offline. Some details might be outdated.
+                            </p>
+                        )}
                         {product.ai_generated && (
                             <p style={{ fontSize: '0.85rem', color: '#94a3b8', marginTop: '0.5rem', marginBottom: '0' }}>
                                 ⚠️ Product data estimated by AI - nutritional values are approximate
@@ -341,9 +380,17 @@ const ProductDetails = () => {
                     {/* ★ Personalized Health Analysis ★ */}
                     {!isUnknown && <PersonalizedAnalysis product={product} />}
 
+                    {/* ★ Health Score Card (0–100) ★ */}
+                    {!isUnknown && <HealthScoreCard product={product} />}
 
+                    {/* ★ Label Interpreter (E-numbers) ★ */}
+                    {!isUnknown && <LabelInterpreter ingredientText={product.ingredients_text} />}
 
+                    {/* ★ Advanced Ingredient Analysis ★ */}
+                    {!isUnknown && <ProductIngredientAnalysis ingredientText={product.ingredients_text} />}
 
+                    {/* ★ Recipe Suggestions ★ */}
+                    {!isUnknown && <RecipeSuggestions product={product} />}
                     {isUnknown && (
                         <div className="glass-card" style={{ padding: '1.5rem', marginBottom: '2rem', border: '1px solid #eab308' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', color: '#eab308', fontWeight: 'bold' }}>
@@ -359,6 +406,9 @@ const ProductDetails = () => {
                             </button>
                         </div>
                     )}
+
+                    {/* ★ Personal Tracking (Favorites, Notes, Intake) ★ */}
+                    <UserTracker product={product} isAuthenticated={isAuthenticated} />
 
                     {/* TruthIn Rating System */}
                     {!isUnknown && truthInRating && (

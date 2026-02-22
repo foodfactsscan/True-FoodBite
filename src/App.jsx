@@ -21,7 +21,13 @@ import Profile from './pages/Profile';
 import OTPVerification from './pages/OTPVerification';
 import ForgotPassword from './pages/ForgotPassword';
 import ResetPassword from './pages/ResetPassword';
+import Compare from './pages/Compare';
+import Admin from './pages/Admin';
+import LabelScanner from './pages/LabelScanner';
+import Dashboard from './pages/Dashboard';
 import { AuthProvider } from './context/AuthContext';
+import OfflineStatus from './components/OfflineStatus';
+import ChatAssistant from './components/ChatAssistant';
 import './App.css';
 
 // Component to scroll to top on route change
@@ -46,6 +52,9 @@ function AnimatedRoutes() {
         <Route path="/how-it-works" element={<HowItWorks />} />
         <Route path="/about" element={<About />} />
         <Route path="/insights" element={<Insights />} />
+        <Route path="/compare" element={<Compare />} />
+        <Route path="/admin" element={<Admin />} />
+        <Route path="/label-scan" element={<LabelScanner />} />
         <Route path="/privacy-policy" element={<PrivacyPolicy />} />
         <Route path="/terms-of-service" element={<TermsOfService />} />
         <Route path="/api-documentation" element={<ApiDocumentation />} />
@@ -54,6 +63,7 @@ function AnimatedRoutes() {
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
         <Route path="/profile" element={<Profile />} />
+        <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/verify-otp" element={<OTPVerification />} />
         <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/reset-password" element={<ResetPassword />} />
@@ -65,6 +75,7 @@ function AnimatedRoutes() {
 function App() {
   return (
     <AuthProvider>
+      <OfflineStatus />
       <Router>
         <ScrollToTop />
         <Navbar />
@@ -74,6 +85,7 @@ function App() {
           </ErrorBoundary>
         </main>
         <Footer />
+        <ChatAssistant />
       </Router>
     </AuthProvider>
   );

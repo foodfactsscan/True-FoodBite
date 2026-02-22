@@ -7,20 +7,69 @@ const INDIA_PRODUCT_URL = 'https://in.openfoodfacts.org/api/v0/product';
 // Import Indian products database for barcode lookup
 import { INDIAN_PRODUCTS_DB } from './indianProductsDb';
 
-// Simple in-memory cache
-const cache = new Map();
-const CACHE_DURATION = 10 * 60 * 1000; // 10 minutes
+// Simple in-memory cache with localStorage fallback for persistence
+const memoryCache = new Map();
+const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours for memory cache
+const PERSISTENT_CACHE_KEY = 'factsscan_products_v1';
+
+// Initialize persistent cache from localStorage
+const getPersistentCache = () => {
+    try {
+        const stored = localStorage.getItem(PERSISTENT_CACHE_KEY);
+        return stored ? JSON.parse(stored) : {};
+    } catch (e) {
+        console.warn('Failed to load persistent cache:', e);
+        return {};
+    }
+};
+
+const savePersistentCache = (cacheObj) => {
+    try {
+        localStorage.setItem(PERSISTENT_CACHE_KEY, JSON.stringify(cacheObj));
+    } catch (e) {
+        console.warn('Failed to save persistent cache:', e);
+        // If localStorage is full, we might want to clear old items here
+        if (e.name === 'QuotaExceededError') {
+            const keys = Object.keys(cacheObj);
+            if (keys.length > 50) {
+                const reducedCache = {};
+                keys.slice(-50).forEach(k => reducedCache[k] = cacheObj[k]);
+                localStorage.setItem(PERSISTENT_CACHE_KEY, JSON.stringify(reducedCache));
+            }
+        }
+    }
+};
 
 const getCached = (key) => {
-    const cached = cache.get(key);
+    // Check memory first
+    const cached = memoryCache.get(key);
     if (cached && Date.now() - cached.timestamp < CACHE_DURATION) {
         return cached.data;
+    }
+
+    // Check localStorage fallback
+    const pCache = getPersistentCache();
+    if (pCache[key]) {
+        // Only return if not excessively old (e.g., 30 days)
+        if (Date.now() - pCache[key].timestamp < 30 * 24 * 60 * 60 * 1000) {
+            // Re-populate memory cache
+            memoryCache.set(key, pCache[key]);
+            return pCache[key].data;
+        }
     }
     return null;
 };
 
-const setCache = (key, data) => {
-    cache.set(key, { data, timestamp: Date.now() });
+const setCache = (key, data, duration = CACHE_DURATION) => {
+    const cacheEntry = { data, timestamp: Date.now() };
+    memoryCache.set(key, cacheEntry);
+
+    // Persist products specifically to localStorage for offline access
+    if (key.startsWith('product_')) {
+        const pCache = getPersistentCache();
+        pCache[key] = cacheEntry;
+        savePersistentCache(pCache);
+    }
 };
 
 // Timeout wrapper for fetch with retry
@@ -288,6 +337,84 @@ export const getProductByBarcode = async (barcode) => {
     return null;
 };
 
+// Common Indian brand aliases / misspellings → correct name
+const BRAND_ALIASES = {
+    'maggie': 'maggi', 'meggi': 'maggi', 'magi': 'maggi',
+    'amool': 'amul', 'amull': 'amul',
+    'haldiran': 'haldiram', 'haldirams': 'haldiram', 'haldiramms': 'haldiram',
+    'parlé': 'parle', 'parleg': 'parle-g', 'parle g': 'parle-g',
+    'brittania': 'britannia', 'britania': 'britannia',
+    'cadburry': 'cadbury', 'cadberry': 'cadbury',
+    'nestle india': 'nestle', 'nestlé': 'nestle',
+    'dabuur': 'dabur', 'dabar': 'dabur',
+    'patanjali': 'patanjali', 'patnjali': 'patanjali',
+    'itc sunfeast': 'sunfeast', 'sun feast': 'sunfeast',
+    'mtr foods': 'mtr', 'mtr ready to eat': 'mtr',
+    'mother dairy': 'mother dairy', 'motherdairy': 'mother dairy',
+    'kissan': 'kissan', 'kisan': 'kissan',
+    'saffolla': 'saffola', 'safola': 'saffola',
+    'bournvita': 'bournvita', 'bornvita': 'bournvita',
+    'boost health': 'boost', 'bost': 'boost',
+    'horlics': 'horlicks', 'horlix': 'horlicks',
+    'complan': 'complan', 'complain': 'complan',
+    'frooti': 'frooti', 'fruiti': 'frooti',
+    'maaza': 'maaza', 'maza': 'maaza',
+    'thumsup': 'thums up', 'thumbs up': 'thums up',
+    'kurkurey': 'kurkure', 'kurkurae': 'kurkure',
+    'yipee': 'yippee', 'yippy': 'yippee', 'yippie': 'yippee',
+    'top raman': 'top ramen', 'topramen': 'top ramen',
+    'bikano': 'bikano', 'bikanoo': 'bikano',
+    'paperboat': 'paper boat', 'paper-boat': 'paper boat',
+    'lijjat': 'lijjat', 'lijat': 'lijjat',
+    'everest masala': 'everest', 'mdh masala': 'mdh',
+    'aashirvaad': 'aashirvaad', 'ashirwad': 'aashirvaad', 'ashirvad': 'aashirvaad',
+    'fortune oil': 'fortune', 'fortune foods': 'fortune',
+    'tata salt': 'tata', 'tata tea': 'tata', 'tata sampann': 'tata',
+};
+
+function normalizeQuery(q) {
+    let lower = q.toLowerCase().trim();
+    // Check brand aliases
+    for (const [alias, correct] of Object.entries(BRAND_ALIASES)) {
+        if (lower === alias || lower.includes(alias)) {
+            lower = lower.replace(alias, correct);
+        }
+    }
+    return lower;
+}
+
+// Search local Indian DB with fuzzy matching (name, brand, category, ingredients)
+function searchLocalDB(query) {
+    const q = normalizeQuery(query);
+    const queryWords = q.split(/\s+/).filter(w => w.length >= 2);
+    const matches = [];
+
+    for (const [, product] of Object.entries(INDIAN_PRODUCTS_DB)) {
+        const name = (product.product_name || '').toLowerCase();
+        const brand = (product.brands || '').toLowerCase();
+        const categories = (product.categories || '').toLowerCase();
+        const ingredients = (product.ingredients_text || '').toLowerCase();
+        const searchable = `${name} ${brand} ${categories} ${ingredients}`;
+
+        // Exact substring match (highest priority)
+        if (name.includes(q) || brand.includes(q)) {
+            matches.push({ product, score: 100 });
+            continue;
+        }
+
+        // All query words found in product data
+        const wordMatches = queryWords.filter(w => searchable.includes(w));
+        if (wordMatches.length === queryWords.length) {
+            matches.push({ product, score: 80 });
+        } else if (wordMatches.length > 0 && wordMatches.length >= queryWords.length * 0.6) {
+            matches.push({ product, score: 50 + (wordMatches.length / queryWords.length) * 30 });
+        }
+    }
+
+    // Sort by score descending
+    return matches.sort((a, b) => b.score - a.score).map(m => m.product);
+}
+
 export const searchProducts = async (query, filters = {}, page = 1) => {
     const cacheKey = `search_${query}_${JSON.stringify(filters)}_${page}`;
     const cached = getCached(cacheKey);
@@ -296,98 +423,80 @@ export const searchProducts = async (query, filters = {}, page = 1) => {
     try {
         // If query is a barcode (numeric), search by barcode first
         if (/^\d{8,14}$/.test(query)) {
-            // Try barcode lookup
             const barcodeResult = await getProductByBarcode(query);
             if (barcodeResult && barcodeResult.status === 1) {
-                return {
-                    products: [barcodeResult.product],
-                    count: 1
-                };
+                return { products: [barcodeResult.product], count: 1 };
             }
         }
 
-        // Search local DB by name (for non-barcode queries)
-        const localMatches = [];
-        const queryLower = query.toLowerCase();
-        for (const [barcode, product] of Object.entries(INDIAN_PRODUCTS_DB)) {
-            const name = (product.product_name || '').toLowerCase();
-            const brand = (product.brands || '').toLowerCase();
-            if (name.includes(queryLower) || brand.includes(queryLower)) {
-                localMatches.push(product);
-            }
-        }
+        // Normalize query (fix misspellings, brand aliases)
+        const normalizedQuery = normalizeQuery(query);
 
-        // Search OpenFoodFacts API
-        let url = `${BASE_URL}?search_terms=${encodeURIComponent(query)}&search_simple=1&action=process&json=1&page=${page}&page_size=24&sort_by=popularity`;
+        // Search local DB with fuzzy matching
+        const localMatches = searchLocalDB(query);
 
-        // Apply filters
+        // Build API URL
+        let url = `${BASE_URL}?search_terms=${encodeURIComponent(normalizedQuery)}&search_simple=1&action=process&json=1&page=${page}&page_size=24&sort_by=popularity`;
+
+        let filterIdx = 0;
         if (filters.vegetarian) {
-            url += `&tagtype_0=labels&tag_contains_0=contains&tag_0=vegetarian`;
+            url += `&tagtype_${filterIdx}=labels&tag_contains_${filterIdx}=contains&tag_${filterIdx}=vegetarian`;
+            filterIdx++;
         }
 
-        // Try India-specific search first
-        const indiaUrl = url + '&countries=india';
-        let products = [];
-        let count = 0;
+        // India-specific search URL (using proper tag filter syntax)
+        const indiaUrl = url + `&tagtype_${filterIdx}=countries&tag_contains_${filterIdx}=contains&tag_${filterIdx}=india`;
 
-        try {
-            const indiaResponse = await fetchWithTimeout(indiaUrl, 10000);
-            const indiaData = await indiaResponse.json();
-            if (indiaData.products && indiaData.products.length > 0) {
-                products = indiaData.products;
-                count = indiaData.count || products.length;
-            }
-        } catch (e) {
-            // India search failed, will try global
+        // Run India + global searches in parallel for speed
+        let indiaProducts = [];
+        let globalProducts = [];
+        let totalCount = 0;
+
+        const [indiaResult, globalResult] = await Promise.allSettled([
+            fetchWithTimeout(indiaUrl, 10000).then(r => r.json()),
+            fetchWithTimeout(url, 10000).then(r => r.json()),
+        ]);
+
+        if (indiaResult.status === 'fulfilled' && indiaResult.value?.products?.length > 0) {
+            indiaProducts = indiaResult.value.products;
+            totalCount = indiaResult.value.count || indiaProducts.length;
         }
 
-        // If India search returned few results, also try global
-        if (products.length < 5) {
-            try {
-                const globalResponse = await fetchWithTimeout(url, 10000);
-                const globalData = await globalResponse.json();
-                if (globalData.products && globalData.products.length > 0) {
-                    // Merge: Indian results first, then global (avoiding duplicates)
-                    const existingIds = new Set(products.map(p => p._id || p.code));
-                    const newProducts = globalData.products.filter(p => !existingIds.has(p._id || p.code));
-                    products = [...products, ...newProducts];
-                    count = Math.max(count, globalData.count || 0);
-                }
-            } catch (e) {
-                // Global search also failed
-            }
+        if (globalResult.status === 'fulfilled' && globalResult.value?.products?.length > 0) {
+            globalProducts = globalResult.value.products;
+            totalCount = Math.max(totalCount, globalResult.value.count || 0);
         }
 
-        // Combine local matches with API results (local first, deduped)
-        if (localMatches.length > 0) {
-            const apiIds = new Set(products.map(p => p._id || p.code));
-            const uniqueLocal = localMatches.filter(p => !apiIds.has(p._id));
-            products = [...uniqueLocal, ...products];
-            count += uniqueLocal.length;
-        }
+        // Merge: Local DB first → Indian API → Global API (deduplicated)
+        const seen = new Set();
+        const products = [];
 
-        const result = { products, count };
+        const addProduct = (p) => {
+            const id = p._id || p.code;
+            if (id && !seen.has(id)) { seen.add(id); products.push(p); }
+        };
+
+        // 1. Local DB matches first (verified Indian products)
+        localMatches.forEach(addProduct);
+        // 2. India API results (confirmed Indian products from OpenFoodFacts)
+        indiaProducts.forEach(addProduct);
+        // 3. Global results (fill remaining)
+        globalProducts.forEach(addProduct);
+
+        totalCount = Math.max(totalCount, products.length);
+
+        const result = { products, count: totalCount };
         setCache(cacheKey, result);
         return result;
 
     } catch (error) {
         console.error("Error searching products:", error);
 
-        // Still return local matches if API fails
-        const localMatches = [];
-        const queryLower = query.toLowerCase();
-        for (const [barcode, product] of Object.entries(INDIAN_PRODUCTS_DB)) {
-            const name = (product.product_name || '').toLowerCase();
-            const brand = (product.brands || '').toLowerCase();
-            if (name.includes(queryLower) || brand.includes(queryLower)) {
-                localMatches.push(product);
-            }
-        }
-
+        // Offline fallback: local DB search
+        const localMatches = searchLocalDB(query);
         if (localMatches.length > 0) {
             return { products: localMatches, count: localMatches.length };
         }
-
         return { products: [], count: 0 };
     }
 };
@@ -412,8 +521,8 @@ export const getProductsByCategory = async (category, page = 1) => {
 
         const offCategory = categoryMapping[category] || category;
 
-        // Try India-specific first
-        const url = `${BASE_URL}?tagtype_0=categories&tag_contains_0=contains&tag_0=${offCategory}&action=process&json=1&page=${page}&page_size=24&sort_by=unique_scans_n&countries=india`;
+        // Try India-specific first (using proper tag filter syntax)
+        const url = `${BASE_URL}?tagtype_0=categories&tag_contains_0=contains&tag_0=${offCategory}&tagtype_1=countries&tag_contains_1=contains&tag_1=india&action=process&json=1&page=${page}&page_size=24&sort_by=unique_scans_n`;
 
         const response = await fetchWithTimeout(url, 12000);
         const data = await response.json();

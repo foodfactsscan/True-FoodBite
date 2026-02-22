@@ -1,11 +1,13 @@
-import { useState, useRef, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { Search, ArrowRight, X, Leaf, Star, Zap, Award, Check, Heart, Camera, Upload, ScanLine, XCircle } from 'lucide-react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Search, ArrowRight, X, Leaf, Star, Zap, Award, Heart, Camera, Upload, ScanLine, XCircle, WifiOff, Check, Clock, Trash2, AlertTriangle, FileText, Clipboard, RotateCcw, Eye, Loader, ShieldAlert, ShieldCheck, Vegan, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import Webcam from 'react-webcam';
-import Quagga from 'quagga';
+import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from '@zxing/library';
 import { searchProducts, getProductsByCategory, getExpertCuratedProducts } from '../services/api';
+import { analyzeLabelImage } from '../services/ocrService';
+import { analyzeIngredientList } from '../services/ingredientAnalyzer';
 
+// ─── Constants ────────────────────────────────────────────────────────────────
 const EXPERT_LISTS = [
     { id: 'high-protein', name: 'High Protein', icon: Zap, color: '#eab308' },
     { id: 'low-sugar', name: 'Low Sugar', icon: Heart, color: '#ec4899' },
@@ -24,497 +26,414 @@ const CATEGORIES = [
     { id: 'seafood', name: 'Seafood' },
 ];
 
+const OFFLINE_QUEUE_KEY = 'factsscan_offline_queue';
+
+// Risk color palette
+const RISK_COLORS = {
+    safe: { bg: 'rgba(34,197,94,0.06)', border: 'rgba(34,197,94,0.15)', color: '#4ade80', icon: '✅' },
+    moderate: { bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.15)', color: '#fbbf24', icon: '⚠️' },
+    risky: { bg: 'rgba(239,68,68,0.06)', border: 'rgba(239,68,68,0.15)', color: '#f87171', icon: '🚫' },
+};
+const NOVA_LABELS = {
+    1: { label: 'Unprocessed', color: '#22c55e', desc: 'Natural, unprocessed food' },
+    2: { label: 'Processed Ingredients', color: '#3b82f6', desc: 'Oils, sugars, flour used as ingredients' },
+    3: { label: 'Processed Food', color: '#f59e0b', desc: 'Canned, smoked, or preserved foods' },
+    4: { label: 'Ultra-Processed', color: '#ef4444', desc: 'Industrial formulations with additives' },
+};
+
+// ─── Offline Queue ────────────────────────────────────────────────────────────
+function getOfflineQueue() { try { return JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]'); } catch { return []; } }
+function addToOfflineQueue(barcode) { const q = getOfflineQueue(); if (!q.some(i => i.barcode === barcode)) { q.push({ barcode, addedAt: new Date().toISOString() }); localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(q)); } }
+function removeFromOfflineQueue(barcode) { localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(getOfflineQueue().filter(i => i.barcode !== barcode))); }
+function clearOfflineQueue() { localStorage.setItem(OFFLINE_QUEUE_KEY, '[]'); }
+
+function hasBarcodeDetectorAPI() { return typeof window !== 'undefined' && 'BarcodeDetector' in window; }
+
+// ═══════════════════════════════════════════════════════════════════════════════
 const Scanner = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(false);
     const [searchResults, setSearchResults] = useState([]);
     const [activeFilter, setActiveFilter] = useState(null);
 
-
-    // New states for camera and image upload
+    // Scan states
     const [scanMode, setScanMode] = useState(null); // 'camera' | 'upload' | null
     const [cameraError, setCameraError] = useState('');
-    const [uploadError, setUploadError] = useState('');
     const [isScanning, setIsScanning] = useState(false);
     const [detectedBarcode, setDetectedBarcode] = useState('');
+    const [isOffline, setIsOffline] = useState(!navigator.onLine);
+    const [offlineQueue, setOfflineQueue] = useState(getOfflineQueue());
+    const [showQueue, setShowQueue] = useState(false);
+    const [scanFeedback, setScanFeedback] = useState('');
 
-    const webcamRef = useRef(null);
+    // OCR states (inline results)
+    const [ocrProgress, setOcrProgress] = useState(0);
+    const [ocrLabel, setOcrLabel] = useState('');
+    const [ocrResults, setOcrResults] = useState(null);
+    const [ocrError, setOcrError] = useState('');
+    const [showRawText, setShowRawText] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    const videoRef = useRef(null);
     const fileInputRef = useRef(null);
-    const scanIntervalRef = useRef(null);
+    const zxingReaderRef = useRef(null);
+    const scanStreamRef = useRef(null);
 
     const navigate = useNavigate();
 
-    // Cleanup on unmount
+    // Online / Offline
     useEffect(() => {
-        return () => {
-            if (scanIntervalRef.current) {
-                clearInterval(scanIntervalRef.current);
-            }
-            if (Quagga.initialized) {
-                Quagga.stop();
-            }
-        };
+        const goOnline = () => { setIsOffline(false); const q = getOfflineQueue(); if (q.length > 0) setScanFeedback(`Back online! ${q.length} queued scan(s) ready.`); };
+        const goOffline = () => setIsOffline(true);
+        window.addEventListener('online', goOnline);
+        window.addEventListener('offline', goOffline);
+        return () => { window.removeEventListener('online', goOnline); window.removeEventListener('offline', goOffline); };
     }, []);
 
+    useEffect(() => { return () => stopCamera(); }, []);
+
+    function stopCamera() {
+        if (zxingReaderRef.current) { try { zxingReaderRef.current.reset(); } catch { } }
+        if (scanStreamRef.current) { scanStreamRef.current.getTracks().forEach(t => t.stop()); scanStreamRef.current = null; }
+    }
+
+    const goToProduct = useCallback((barcode) => {
+        if (!navigator.onLine) { addToOfflineQueue(barcode); setOfflineQueue(getOfflineQueue()); setScanFeedback(`Offline! Barcode ${barcode} queued.`); setTimeout(() => setScanFeedback(''), 4000); return; }
+        navigate(`/product/${barcode}`);
+    }, [navigate]);
+
+    // ─── Search (handles both text and barcode numbers) ───────────────────────
     const handleSearch = async (e) => {
         e.preventDefault();
         if (!searchTerm) return;
-        performSearch(searchTerm);
-    };
-
-    const performSearch = async (term) => {
         setLoading(true);
-        // If it is numeric, assume barcode
-        if (/^\d+$/.test(term)) {
-            navigate(`/product/${term}`);
+        if (/^\d+$/.test(searchTerm.trim())) {
+            goToProduct(searchTerm.trim());
+            setLoading(false);
             return;
         }
-
         setActiveFilter(null);
-        const results = await searchProducts(term, {});
+        const results = await searchProducts(searchTerm, {});
         setSearchResults(results.products || []);
         setLoading(false);
     };
 
-    const handleExpertClick = async (type) => {
-        setLoading(true);
-        setSearchTerm('');
-        setActiveFilter(type);
-        const results = await getExpertCuratedProducts(type);
-        setSearchResults(results.products || []);
-        setLoading(false);
-    };
+    const handleExpertClick = async (type) => { setLoading(true); setSearchTerm(''); setActiveFilter(type); const r = await getExpertCuratedProducts(type); setSearchResults(r.products || []); setLoading(false); };
+    const handleCategoryClick = async (catId) => { setLoading(true); setSearchTerm(''); setActiveFilter(catId); const r = await getProductsByCategory(catId); setSearchResults(r.products || []); setLoading(false); };
+    const clearResults = () => { setSearchResults([]); setSearchTerm(''); setActiveFilter(null); };
 
-    const handleCategoryClick = async (catId) => {
-        setLoading(true);
-        setSearchTerm('');
-        setActiveFilter(catId);
-        const results = await getProductsByCategory(catId);
-        setSearchResults(results.products || []);
-        setLoading(false);
-    };
-
-    const clearResults = () => {
-        setSearchResults([]);
-        setSearchTerm('');
-        setActiveFilter(null);
-    };
-
-    // Camera Barcode Scanning
-    const startCameraScanning = () => {
+    // ═══════════════════════════════════════════════════════════════════════════
+    // CAMERA SCAN  — tries barcode first, then offers OCR on the frame
+    // ═══════════════════════════════════════════════════════════════════════════
+    const startCameraScanning = async () => {
         setScanMode('camera');
         setCameraError('');
+        setDetectedBarcode('');
         setIsScanning(true);
+        setScanFeedback('Starting camera...');
+        setOcrResults(null);
+        setOcrError('');
 
-        // Start scanning after camera initializes
-        setTimeout(() => {
-            if (webcamRef.current) {
-                scanIntervalRef.current = setInterval(() => {
-                    captureAndScan();
-                }, 1000); // Scan every second
-            }
-        }, 1000);
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } } });
+            scanStreamRef.current = stream;
+            await new Promise(r => setTimeout(r, 300));
+            if (videoRef.current) { videoRef.current.srcObject = stream; await videoRef.current.play(); }
+            setScanFeedback('Camera ready — point at barcode or label...');
+            if (hasBarcodeDetectorAPI()) { scanWithNativeAPI(); } else { scanWithZXing(); }
+        } catch {
+            setCameraError('Camera access denied or not available.');
+            setIsScanning(false);
+        }
     };
 
-    const captureAndScan = () => {
-        if (!webcamRef.current) return;
-
-        const imageSrc = webcamRef.current.getScreenshot();
-        if (!imageSrc) return;
-
-        // Create image element for Quagga
-        const img = new Image();
-        img.src = imageSrc;
-        img.onload = () => {
-            Quagga.decodeSingle({
-                src: imageSrc,
-                numOfWorkers: 0,
-                inputStream: {
-                    size: 800
-                },
-                decoder: {
-                    readers: ['ean_reader', 'ean_8_reader', 'code_128_reader', 'code_39_reader', 'upc_reader', 'upc_e_reader']
-                },
-            }, (result) => {
-                if (result && result.codeResult) {
-                    const barcode = result.codeResult.code;
-                    setDetectedBarcode(barcode);
-                    setIsScanning(false);
-                    clearInterval(scanIntervalRef.current);
-
-                    // Auto-search with detected barcode
-                    setTimeout(() => {
-                        closeScanMode();
-                        navigate(`/product/${barcode}`);
-                    }, 1500);
-                }
-            });
+    const scanWithNativeAPI = () => {
+        if (!videoRef.current) return;
+        const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
+        let cancelled = false;
+        const tick = async () => {
+            if (cancelled || !videoRef.current || videoRef.current.readyState < 2) { if (!cancelled) requestAnimationFrame(tick); return; }
+            try {
+                const barcodes = await detector.detect(videoRef.current);
+                if (barcodes.length > 0 && barcodes[0].rawValue) { onBarcodeDetected(barcodes[0].rawValue); return; }
+            } catch { }
+            if (!cancelled) requestAnimationFrame(tick);
         };
+        requestAnimationFrame(tick);
+        zxingReaderRef.current = { reset: () => { cancelled = true; } };
     };
 
-    const handleCameraError = (error) => {
-        console.error('Camera error:', error);
-        setCameraError('Camera access denied or not available. Please check permissions.');
+    const scanWithZXing = () => {
+        if (!videoRef.current) return;
+        const hints = new Map();
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        const reader = new BrowserMultiFormatReader(hints);
+        zxingReaderRef.current = reader;
+        const canvas = document.createElement('canvas'); const ctx = canvas.getContext('2d');
+        let cancelled = false;
+        const tick = () => {
+            if (cancelled || !videoRef.current || videoRef.current.readyState < 2) { if (!cancelled) setTimeout(tick, 200); return; }
+            canvas.width = videoRef.current.videoWidth; canvas.height = videoRef.current.videoHeight;
+            ctx.drawImage(videoRef.current, 0, 0);
+            try { const lum = reader.createBinaryBitmap(canvas); const result = reader.decodeBitmap(lum); if (result?.getText()) { onBarcodeDetected(result.getText()); return; } } catch { }
+            if (!cancelled) setTimeout(tick, 300);
+        };
+        setTimeout(tick, 500);
+        const origReset = reader.reset.bind(reader);
+        reader.reset = () => { cancelled = true; try { origReset(); } catch { } };
+    };
+
+    const onBarcodeDetected = (code) => {
+        setDetectedBarcode(code);
         setIsScanning(false);
+        setScanFeedback(`✅ Barcode detected: ${code}`);
+        setTimeout(() => { closeScanMode(); goToProduct(code); }, 1200);
     };
 
-    // Image Upload Barcode Detection
-    const handleImageUpload = (e) => {
+    // Camera → read label via OCR (capture current frame)
+    const captureFrameForOCR = async () => {
+        if (!videoRef.current) return;
+        setIsScanning(false);
+        setOcrProgress(0);
+        setOcrLabel('Capturing frame...');
+
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        canvas.getContext('2d').drawImage(videoRef.current, 0, 0);
+        const dataUrl = canvas.toDataURL('image/png');
+
+        stopCamera();
+        setScanFeedback('');
+        await runOCRAnalysis(dataUrl);
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // IMAGE UPLOAD  — tries barcode, then falls back to OCR automatically
+    // ═══════════════════════════════════════════════════════════════════════════
+    const handleImageUpload = async (e) => {
         const file = e.target.files?.[0];
         if (!file) return;
 
-        setUploadError('');
+        setScanMode('upload');
         setIsScanning(true);
+        setDetectedBarcode('');
+        setOcrResults(null);
+        setOcrError('');
+        setScanFeedback('Detecting barcode...');
 
-        const reader = new FileReader();
-        reader.onload = (event) => {
-            const imageSrc = event.target.result;
+        const src = URL.createObjectURL(file);
 
-            Quagga.decodeSingle({
-                src: imageSrc,
-                numOfWorkers: 0,
-                inputStream: {
-                    size: 800
-                },
-                decoder: {
-                    readers: ['ean_reader', 'ean_8_reader', 'code_128_reader', 'code_39_reader', 'upc_reader', 'upc_e_reader']
-                },
-            }, (result) => {
-                setIsScanning(false);
+        // Step 1: try barcode detection
+        let barcodeFound = false;
 
-                if (result && result.codeResult) {
-                    const barcode = result.codeResult.code;
-                    setDetectedBarcode(barcode);
+        if (hasBarcodeDetectorAPI()) {
+            try {
+                const img = await createImageBitmap(file);
+                const detector = new window.BarcodeDetector({ formats: ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
+                const barcodes = await detector.detect(img);
+                if (barcodes.length > 0 && barcodes[0].rawValue) { barcodeFound = true; onBarcodeDetected(barcodes[0].rawValue); return; }
+            } catch { }
+        }
 
-                    // Auto-search with detected barcode
-                    setTimeout(() => {
-                        closeScanMode();
-                        navigate(`/product/${barcode}`);
-                    }, 1500);
-                } else {
-                    setUploadError('No barcode detected in the image. Please try another image or ensure the barcode is clearly visible.');
-                }
-            });
-        };
+        if (!barcodeFound) {
+            try {
+                const hints = new Map();
+                hints.set(DecodeHintType.POSSIBLE_FORMATS, [BarcodeFormat.EAN_13, BarcodeFormat.EAN_8, BarcodeFormat.UPC_A, BarcodeFormat.UPC_E, BarcodeFormat.CODE_128, BarcodeFormat.CODE_39]);
+                hints.set(DecodeHintType.TRY_HARDER, true);
+                const reader = new BrowserMultiFormatReader(hints);
+                const result = await reader.decodeFromImageUrl(src);
+                if (result?.getText()) { barcodeFound = true; onBarcodeDetected(result.getText()); return; }
+            } catch { }
+        }
 
-        reader.onerror = () => {
-            setUploadError('Failed to read the image file. Please try again.');
-            setIsScanning(false);
-        };
+        // Step 2: no barcode → fall back to OCR label scan
+        setIsScanning(false);
+        setScanFeedback('No barcode found — reading label with OCR...');
+        await runOCRAnalysis(file);
 
-        reader.readAsDataURL(file);
+        if (fileInputRef.current) fileInputRef.current.value = '';
     };
 
+    // ─── Shared OCR runner ────────────────────────────────────────────────────
+    const runOCRAnalysis = async (source) => {
+        setOcrProgress(0);
+        setOcrLabel('Preparing image...');
+        setOcrError('');
+
+        try {
+            const result = await analyzeLabelImage(source, (p) => {
+                setOcrProgress(p);
+                if (p < 15) setOcrLabel('Preprocessing...');
+                else if (p < 40) setOcrLabel('Initializing OCR...');
+                else if (p < 80) setOcrLabel('Reading text...');
+                else if (p < 95) setOcrLabel('Parsing results...');
+                else setOcrLabel('Done!');
+            });
+
+            if (!result.rawText || result.rawText.trim().length < 5) {
+                setOcrError('Could not detect text. Try a clearer, well-lit photo.');
+            } else {
+                setOcrResults(result);
+            }
+        } catch {
+            setOcrError('OCR analysis failed. Please try a different image.');
+        }
+        setOcrProgress(100);
+        setOcrLabel('');
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
     const closeScanMode = () => {
+        stopCamera();
         setScanMode(null);
         setIsScanning(false);
         setDetectedBarcode('');
         setCameraError('');
-        setUploadError('');
-        if (scanIntervalRef.current) {
-            clearInterval(scanIntervalRef.current);
-        }
-        if (Quagga.initialized) {
-            Quagga.stop();
-        }
+        setScanFeedback('');
+        setOcrProgress(0);
+        setOcrLabel('');
     };
 
+    const clearOCR = () => { setOcrResults(null); setOcrError(''); setShowRawText(false); };
+    const processQueueItem = (b) => { removeFromOfflineQueue(b); setOfflineQueue(getOfflineQueue()); navigate(`/product/${b}`); };
+    const removeQueueItem = (b) => { removeFromOfflineQueue(b); setOfflineQueue(getOfflineQueue()); };
+    const handleClearQueue = () => { clearOfflineQueue(); setOfflineQueue([]); };
+    const copyText = () => { if (!ocrResults?.rawText) return; navigator.clipboard.writeText(ocrResults.rawText).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RENDER
+    // ═══════════════════════════════════════════════════════════════════════════
     return (
-        <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            exit={{ opacity: 0, x: 20 }}
-            transition={{ duration: 0.3 }}
-            className="container"
-            style={{ paddingBottom: '4rem' }}
-        >
+        <motion.div initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} transition={{ duration: 0.3 }} className="container" style={{ paddingBottom: '4rem' }}>
             <div style={{ maxWidth: '800px', margin: '0 auto', textAlign: 'center', marginBottom: '3rem' }}>
                 <h1 className="section-title">Find Healthy Food</h1>
-                <p className="section-subtitle">Search products, scan barcodes, or browse expert-curated lists.</p>
+                <p className="section-subtitle">Search by name, enter a barcode number, scan barcodes, or upload a label photo.</p>
 
                 {/* Search Bar */}
                 <form onSubmit={handleSearch} style={{ position: 'relative', marginTop: '2rem' }}>
-                    <div className="glass-panel" style={{
-                        display: 'flex', alignItems: 'center', padding: '0.5rem', borderRadius: 'var(--radius-full)', background: 'rgba(255,255,255,0.05)'
-                    }}>
+                    <div className="glass-panel" style={{ display: 'flex', alignItems: 'center', padding: '0.5rem', borderRadius: 'var(--radius-full)', background: 'rgba(255,255,255,0.05)' }}>
                         <Search className="text-muted" style={{ marginLeft: '1rem', color: 'var(--color-text-muted)' }} />
-                        <input
-                            type="text"
-                            placeholder="Search product (e.g. 'Oats', 'Nutella') or enter barcode..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', padding: '1rem', fontSize: '1rem', outline: 'none' }}
-                        />
+                        <input type="text" placeholder="Search product name or type barcode number..."
+                            value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+                            style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', padding: '1rem', fontSize: '1rem', outline: 'none' }} />
                         {searchTerm && <button type="button" onClick={() => setSearchTerm('')} style={{ background: 'none', border: 'none', color: '#fff', cursor: 'pointer', marginRight: '0.5rem' }}><X size={18} /></button>}
-                        <button type="submit" className="btn-primary" disabled={loading}>
-                            {loading ? '...' : 'Search'}
-                        </button>
+                        <button type="submit" className="btn-primary" disabled={loading}>{loading ? '...' : isOffline ? 'Search Cache' : 'Search'}</button>
                     </div>
 
-                    {/* Scan Options - Camera & Upload */}
+                    {isOffline && (
+                        <p style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: '#ef4444', fontWeight: '500', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem' }}>
+                            <WifiOff size={14} /> Offline — scans will be queued for later.
+                        </p>
+                    )}
+
+                    {/* ── 2 Clean Buttons ── */}
                     <div style={{ marginTop: '1.5rem', display: 'flex', gap: '1rem', justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <motion.button
-                            type="button"
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
+                        <motion.button type="button" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
                             onClick={startCameraScanning}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                padding: '0.75rem 1.5rem',
-                                background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)',
-                                border: 'none',
-                                borderRadius: 'var(--radius-full)',
-                                color: '#fff',
-                                fontSize: '0.95rem',
-                                fontWeight: '600',
-                                cursor: 'pointer',
-                                boxShadow: '0 4px 15px rgba(124, 58, 237, 0.3)'
-                            }}
-                        >
-                            <Camera size={20} />
-                            Scan Barcode
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.85rem 1.8rem', background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)', border: 'none', borderRadius: 'var(--radius-full)', color: '#fff', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 20px rgba(124,58,237,0.3)' }}>
+                            <Camera size={20} /> Scan Barcode / Label
                         </motion.button>
 
-                        <motion.button
-                            type="button"
-                            whileHover={{ scale: 1.05 }}
-                            whileTap={{ scale: 0.95 }}
-                            onClick={() => {
-                                setScanMode('upload');
-                                fileInputRef.current?.click();
-                            }}
-                            style={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.5rem',
-                                padding: '0.75rem 1.5rem',
-                                background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)',
-                                border: 'none',
-                                borderRadius: 'var(--radius-full)',
-                                color: '#fff',
-                                fontSize: '0.95rem',
-                                fontWeight: '600',
-                                cursor: 'pointer',
-                                boxShadow: '0 4px 15px rgba(59, 130, 246, 0.3)'
-                            }}
-                        >
-                            <Upload size={20} />
-                            Upload Image
+                        <motion.button type="button" whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }}
+                            onClick={() => fileInputRef.current?.click()}
+                            style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.85rem 1.8rem', background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 100%)', border: 'none', borderRadius: 'var(--radius-full)', color: '#fff', fontSize: '1rem', fontWeight: '600', cursor: 'pointer', boxShadow: '0 4px 20px rgba(59,130,246,0.3)' }}>
+                            <Upload size={20} /> Upload Image
                         </motion.button>
                     </div>
 
-                    {/* Hidden file input */}
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleImageUpload}
-                        style={{ display: 'none' }}
-                    />
-
-
+                    <input ref={fileInputRef} type="file" accept="image/*" capture="environment" onChange={handleImageUpload} style={{ display: 'none' }} />
                 </form>
+
+                {/* Offline Queue */}
+                {offlineQueue.length > 0 && (
+                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }}
+                        style={{ marginTop: '1.5rem', padding: '1rem 1.5rem', borderRadius: 'var(--radius-lg)', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', textAlign: 'left' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: showQueue ? '0.75rem' : 0 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#f59e0b', fontWeight: '600', fontSize: '0.9rem' }}>
+                                <Clock size={16} /> {offlineQueue.length} queued scan{offlineQueue.length > 1 ? 's' : ''}
+                            </span>
+                            <div style={{ display: 'flex', gap: '0.5rem' }}>
+                                <button onClick={() => setShowQueue(!showQueue)} style={{ background: 'rgba(245,158,11,0.15)', border: 'none', color: '#f59e0b', padding: '0.3rem 0.8rem', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem' }}>{showQueue ? 'Hide' : 'View'}</button>
+                                {!isOffline && <button onClick={handleClearQueue} style={{ background: 'rgba(239,68,68,0.1)', border: 'none', color: '#ef4444', padding: '0.3rem 0.8rem', borderRadius: '8px', cursor: 'pointer', fontSize: '0.8rem' }}>Clear</button>}
+                            </div>
+                        </div>
+                        {showQueue && (
+                            <div style={{ display: 'grid', gap: '0.4rem' }}>
+                                {offlineQueue.map(item => (
+                                    <div key={item.barcode} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0.8rem', borderRadius: '8px', background: 'rgba(255,255,255,0.03)' }}>
+                                        <span style={{ fontFamily: 'monospace', color: '#e2e8f0', fontSize: '0.9rem' }}>{item.barcode}</span>
+                                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                                            {!isOffline && <button onClick={() => processQueueItem(item.barcode)} style={{ background: 'rgba(34,197,94,0.1)', border: 'none', color: '#22c55e', padding: '0.25rem 0.6rem', borderRadius: '6px', cursor: 'pointer', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.25rem' }}><ArrowRight size={12} /> Look up</button>}
+                                            <button onClick={() => removeQueueItem(item.barcode)} style={{ background: 'rgba(239,68,68,0.1)', border: 'none', color: '#ef4444', padding: '0.25rem 0.5rem', borderRadius: '6px', cursor: 'pointer' }}><Trash2 size={12} /></button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </motion.div>
+                )}
             </div>
 
-            {/* Camera/Upload Modal */}
+            {/* ══════════════════════════════════════════════════════════════════
+                CAMERA MODAL
+            ══════════════════════════════════════════════════════════════════ */}
             <AnimatePresence>
                 {scanMode === 'camera' && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        style={{
-                            position: 'fixed',
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            background: 'rgba(0, 0, 0, 0.95)',
-                            zIndex: 1000,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '2rem'
-                        }}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            style={{
-                                background: 'var(--gradient-card)',
-                                borderRadius: 'var(--radius-2xl)',
-                                padding: '2rem',
-                                maxWidth: '600px',
-                                width: '100%',
-                                position: 'relative',
-                                border: '1px solid rgba(255, 255, 255, 0.1)'
-                            }}
-                        >
-                            <button
-                                onClick={closeScanMode}
-                                style={{
-                                    position: 'absolute',
-                                    top: '1rem',
-                                    right: '1rem',
-                                    background: 'rgba(239, 68, 68, 0.2)',
-                                    border: '1px solid #ef4444',
-                                    borderRadius: 'var(--radius-full)',
-                                    width: '36px',
-                                    height: '36px',
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    cursor: 'pointer',
-                                    color: '#ef4444'
-                                }}
-                            >
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1.5rem' }}>
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }}
+                            style={{ background: 'var(--gradient-card)', borderRadius: 'var(--radius-2xl)', padding: '2rem', maxWidth: '600px', width: '100%', position: 'relative', border: '1px solid rgba(255,255,255,0.1)' }}>
+                            <button onClick={closeScanMode} style={{ position: 'absolute', top: '1rem', right: '1rem', background: 'rgba(239,68,68,0.2)', border: '1px solid #ef4444', borderRadius: 'var(--radius-full)', width: '36px', height: '36px', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#ef4444', zIndex: 10 }}>
                                 <XCircle size={20} />
                             </button>
 
                             <div style={{ textAlign: 'center', marginBottom: '1.5rem' }}>
-                                <div style={{
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    justifyContent: 'center',
-                                    width: '60px',
-                                    height: '60px',
-                                    borderRadius: 'var(--radius-full)',
-                                    background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)',
-                                    marginBottom: '1rem'
-                                }}>
+                                <div style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '60px', height: '60px', borderRadius: 'var(--radius-full)', background: 'linear-gradient(135deg,#7c3aed,#ec4899)', marginBottom: '1rem' }}>
                                     <ScanLine size={30} color="#fff" />
                                 </div>
-                                <h2 style={{ fontSize: '1.5rem', fontWeight: '800', marginBottom: '0.5rem' }}>
-                                    Scan Barcode
-                                </h2>
-                                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>
-                                    Position the barcode within the frame
-                                </p>
+                                <h2 style={{ fontSize: '1.4rem', fontWeight: '800', marginBottom: '0.4rem' }}>Scan Barcode or Label</h2>
+                                <p style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>{scanFeedback || 'Point at barcode or ingredient label'}</p>
                             </div>
 
                             {cameraError ? (
-                                <div style={{
-                                    padding: '1.5rem',
-                                    background: 'rgba(239, 68, 68, 0.1)',
-                                    border: '1px solid rgba(239, 68, 68, 0.3)',
-                                    borderRadius: 'var(--radius-lg)',
-                                    textAlign: 'center',
-                                    color: '#ef4444'
-                                }}>
+                                <div style={{ padding: '1.5rem', background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius-lg)', textAlign: 'center', color: '#ef4444' }}>
                                     <XCircle size={40} style={{ marginBottom: '1rem' }} />
                                     <p>{cameraError}</p>
                                 </div>
                             ) : (
                                 <>
-                                    <div style={{
-                                        position: 'relative',
-                                        borderRadius: 'var(--radius-lg)',
-                                        overflow: 'hidden',
-                                        background: '#000',
-                                        aspectRatio: '4/3'
-                                    }}>
-                                        <Webcam
-                                            ref={webcamRef}
-                                            audio={false}
-                                            screenshotFormat="image/jpeg"
-                                            videoConstraints={{
-                                                facingMode: 'environment'
-                                            }}
-                                            onUserMediaError={handleCameraError}
-                                            style={{
-                                                width: '100%',
-                                                height: '100%',
-                                                objectFit: 'cover'
-                                            }}
-                                        />
-
-                                        {/* Scanning overlay */}
-                                        <div style={{
-                                            position: 'absolute',
-                                            top: '50%',
-                                            left: '50%',
-                                            transform: 'translate(-50%, -50%)',
-                                            width: '80%',
-                                            height: '40%',
-                                            border: '3px solid #7c3aed',
-                                            borderRadius: 'var(--radius-lg)',
-                                            boxShadow: '0 0 0 9999px rgba(0, 0, 0, 0.5)'
-                                        }}>
-                                            <div style={{
-                                                position: 'absolute',
-                                                top: 0,
-                                                left: 0,
-                                                width: '20px',
-                                                height: '20px',
-                                                borderTop: '4px solid #ec4899',
-                                                borderLeft: '4px solid #ec4899'
-                                            }} />
-                                            <div style={{
-                                                position: 'absolute',
-                                                top: 0,
-                                                right: 0,
-                                                width: '20px',
-                                                height: '20px',
-                                                borderTop: '4px solid #ec4899',
-                                                borderRight: '4px solid #ec4899'
-                                            }} />
-                                            <div style={{
-                                                position: 'absolute',
-                                                bottom: 0,
-                                                left: 0,
-                                                width: '20px',
-                                                height: '20px',
-                                                borderBottom: '4px solid #ec4899',
-                                                borderLeft: '4px solid #ec4899'
-                                            }} />
-                                            <div style={{
-                                                position: 'absolute',
-                                                bottom: 0,
-                                                right: 0,
-                                                width: '20px',
-                                                height: '20px',
-                                                borderBottom: '4px solid #ec4899',
-                                                borderRight: '4px solid #ec4899'
-                                            }} />
+                                    <div style={{ position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', background: '#000', aspectRatio: '4/3' }}>
+                                        <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                        <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', width: '80%', height: '40%', border: '3px solid #7c3aed', borderRadius: 'var(--radius-lg)', boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)' }}>
+                                            {[{ t: 0, l: 0, bt: '4px solid #ec4899', bl: '4px solid #ec4899' }, { t: 0, r: 0, bt: '4px solid #ec4899', br: '4px solid #ec4899' }, { b: 0, l: 0, bb: '4px solid #ec4899', bl: '4px solid #ec4899' }, { b: 0, r: 0, bb: '4px solid #ec4899', br: '4px solid #ec4899' }].map((c, i) => (
+                                                <div key={i} style={{ position: 'absolute', width: '20px', height: '20px', top: c.t, bottom: c.b, left: c.l, right: c.r, borderTop: c.bt, borderBottom: c.bb, borderLeft: c.bl, borderRight: c.br }} />
+                                            ))}
+                                            {isScanning && <motion.div animate={{ y: ['0%', '100%', '0%'] }} transition={{ duration: 2, repeat: Infinity, ease: 'linear' }} style={{ position: 'absolute', left: 0, right: 0, height: '2px', background: 'linear-gradient(90deg,transparent,#ec4899,transparent)' }} />}
                                         </div>
                                     </div>
 
                                     {detectedBarcode && (
-                                        <motion.div
-                                            initial={{ opacity: 0, y: 20 }}
-                                            animate={{ opacity: 1, y: 0 }}
-                                            style={{
-                                                marginTop: '1rem',
-                                                padding: '1rem',
-                                                background: 'rgba(34, 197, 94, 0.1)',
-                                                border: '1px solid rgba(34, 197, 94, 0.3)',
-                                                borderRadius: 'var(--radius-lg)',
-                                                textAlign: 'center'
-                                            }}
-                                        >
+                                        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                                            style={{ marginTop: '1rem', padding: '1rem', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 'var(--radius-lg)', textAlign: 'center' }}>
                                             <Check size={24} color="#22c55e" style={{ marginBottom: '0.5rem' }} />
-                                            <p style={{ color: '#22c55e', fontWeight: '600' }}>
-                                                Barcode Detected: {detectedBarcode}
-                                            </p>
-                                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>
-                                                Redirecting to product...
-                                            </p>
+                                            <p style={{ color: '#22c55e', fontWeight: '600' }}>Barcode Detected: {detectedBarcode}</p>
+                                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem', marginTop: '0.25rem' }}>Redirecting to product...</p>
                                         </motion.div>
                                     )}
 
                                     {isScanning && !detectedBarcode && (
-                                        <div style={{
-                                            marginTop: '1rem',
-                                            textAlign: 'center',
-                                            color: 'var(--color-text-muted)'
-                                        }}>
-                                            <div className="animate-pulse" style={{ marginBottom: '0.5rem' }}>
-                                                <ScanLine size={24} style={{ display: 'inline-block' }} />
+                                        <div style={{ marginTop: '1rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--color-text-muted)' }}>
+                                                <div className="animate-pulse"><ScanLine size={20} /></div>
+                                                <span style={{ fontSize: '0.9rem' }}>Scanning for barcode...</span>
                                             </div>
-                                            <p style={{ fontSize: '0.9rem' }}>Scanning for barcode...</p>
+                                            {/* Offer OCR option while scanning */}
+                                            <button onClick={captureFrameForOCR}
+                                                style={{ padding: '0.6rem 1.2rem', borderRadius: 'var(--radius-full)', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.05)', color: '#a855f7', cursor: 'pointer', fontSize: '0.85rem', fontWeight: '600', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                                <FileText size={14} /> No barcode? Read label text instead
+                                            </button>
                                         </div>
                                     )}
                                 </>
@@ -524,146 +443,136 @@ const Scanner = () => {
                 )}
             </AnimatePresence>
 
-            {/* Upload Processing Modal */}
+            {/* ══════════════════════════════════════════════════════════════════
+                UPLOAD PROCESSING OVERLAY
+            ══════════════════════════════════════════════════════════════════ */}
             <AnimatePresence>
                 {scanMode === 'upload' && isScanning && (
-                    <motion.div
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        exit={{ opacity: 0 }}
-                        style={{
-                            position: 'fixed',
-                            top: 0,
-                            left: 0,
-                            right: 0,
-                            bottom: 0,
-                            background: 'rgba(0, 0, 0, 0.95)',
-                            zIndex: 1000,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '2rem'
-                        }}
-                    >
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            style={{
-                                background: 'var(--gradient-card)',
-                                borderRadius: 'var(--radius-2xl)',
-                                padding: '3rem',
-                                textAlign: 'center',
-                                border: '1px solid rgba(255, 255, 255, 0.1)'
-                            }}
-                        >
-                            <div className="animate-pulse" style={{ marginBottom: '1rem' }}>
-                                <Upload size={48} color="#3b82f6" />
-                            </div>
-                            <h3 style={{ fontSize: '1.2rem', fontWeight: '700', marginBottom: '0.5rem' }}>
-                                Processing Image...
-                            </h3>
-                            <p style={{ color: 'var(--color-text-muted)' }}>
-                                Detecting barcode from uploaded image
-                            </p>
+                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}>
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                            style={{ background: 'var(--gradient-card)', borderRadius: 'var(--radius-2xl)', padding: '3rem', textAlign: 'center', border: '1px solid rgba(255,255,255,0.1)', maxWidth: '400px' }}>
+                            <div className="animate-pulse" style={{ marginBottom: '1rem' }}><Upload size={48} color="#3b82f6" /></div>
+                            <h3 style={{ fontSize: '1.2rem', fontWeight: '700', marginBottom: '0.5rem' }}>Processing Image...</h3>
+                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem' }}>{scanFeedback || 'Detecting barcode...'}</p>
                         </motion.div>
                     </motion.div>
                 )}
             </AnimatePresence>
 
-            {/* Upload Error Display */}
+            {/* ══════════════════════════════════════════════════════════════════
+                OCR PROGRESS (shows during label analysis)
+            ══════════════════════════════════════════════════════════════════ */}
             <AnimatePresence>
-                {uploadError && (
-                    <motion.div
-                        initial={{ opacity: 0, y: -20 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, y: -20 }}
-                        style={{
-                            position: 'fixed',
-                            top: '100px',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            zIndex: 1001,
-                            maxWidth: '500px',
-                            width: '90%'
-                        }}
-                    >
-                        <div style={{
-                            padding: '1.5rem',
-                            background: 'rgba(239, 68, 68, 0.95)',
-                            border: '1px solid #ef4444',
-                            borderRadius: 'var(--radius-lg)',
-                            color: '#fff',
-                            boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)',
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: '1rem'
-                        }}>
-                            <XCircle size={24} style={{ flexShrink: 0, marginTop: '0.2rem' }} />
-                            <div style={{ flex: 1 }}>
-                                <p style={{ fontWeight: '600', marginBottom: '0.25rem' }}>Upload Error</p>
-                                <p style={{ fontSize: '0.9rem', opacity: 0.9 }}>{uploadError}</p>
+                {ocrLabel && !ocrResults && !ocrError && (
+                    <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                        style={{ maxWidth: '600px', margin: '0 auto 2rem' }}>
+                        <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '2rem', textAlign: 'center' }}>
+                            <div className="animate-pulse" style={{ marginBottom: '1rem' }}><FileText size={36} color="#a855f7" /></div>
+                            <h3 style={{ fontWeight: '700', marginBottom: '1rem' }}>Reading Label...</h3>
+                            <div style={{ height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.1)', overflow: 'hidden', marginBottom: '0.75rem' }}>
+                                <motion.div initial={{ width: 0 }} animate={{ width: `${ocrProgress}%` }} transition={{ duration: 0.3 }}
+                                    style={{ height: '100%', borderRadius: '3px', background: 'linear-gradient(90deg,#7c3aed,#ec4899)' }} />
                             </div>
-                            <button
-                                onClick={() => {
-                                    setUploadError('');
-                                    setScanMode(null);
-                                }}
-                                style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    color: '#fff',
-                                    cursor: 'pointer',
-                                    padding: '0.25rem'
-                                }}
-                            >
-                                <X size={20} />
-                            </button>
+                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                <span style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>{ocrLabel}</span>
+                                <span style={{ color: '#a855f7', fontWeight: '600', fontSize: '0.85rem' }}>{ocrProgress}%</span>
+                            </div>
                         </div>
                     </motion.div>
                 )}
             </AnimatePresence>
 
+            {/* ══════════════════════════════════════════════════════════════════
+                OCR ERROR
+            ══════════════════════════════════════════════════════════════════ */}
+            <AnimatePresence>
+                {ocrError && (
+                    <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                        style={{ maxWidth: '600px', margin: '0 auto 2rem', padding: '1.2rem 1.5rem', borderRadius: 'var(--radius-lg)', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                        <AlertTriangle size={22} color="#ef4444" style={{ flexShrink: 0 }} />
+                        <div style={{ flex: 1 }}>
+                            <p style={{ color: '#ef4444', fontWeight: '600', marginBottom: '0.15rem' }}>Detection Issue</p>
+                            <p style={{ color: '#f87171', fontSize: '0.85rem' }}>{ocrError}</p>
+                        </div>
+                        <button onClick={clearOCR} style={{ padding: '0.5rem 1rem', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: '600', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <RotateCcw size={14} /> Retry
+                        </button>
+                    </motion.div>
+                )}
+            </AnimatePresence>
+
+            {/* ══════════════════════════════════════════════════════════════════
+                OCR RESULTS (inline, not a separate page)
+            ══════════════════════════════════════════════════════════════════ */}
+            {ocrResults && (
+                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}
+                    style={{ maxWidth: '700px', margin: '0 auto 2rem' }}>
+
+                    {/* Confidence */}
+                    <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.6rem' }}>
+                            <span style={{ fontWeight: '700', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><Check size={16} color="#22c55e" /> OCR Confidence</span>
+                            <span style={{ color: ocrResults.confidence > 70 ? '#22c55e' : ocrResults.confidence > 40 ? '#f59e0b' : '#ef4444', fontWeight: '700', fontSize: '1.1rem' }}>{Math.round(ocrResults.confidence)}%</span>
+                        </div>
+                        <div style={{ height: '6px', borderRadius: '3px', background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                            <div style={{ height: '100%', borderRadius: '3px', width: `${ocrResults.confidence}%`, background: ocrResults.confidence > 70 ? '#22c55e' : ocrResults.confidence > 40 ? '#f59e0b' : '#ef4444', transition: 'width 1s' }} />
+                        </div>
+                    </div>
+
+                    {/* Action bar */}
+                    <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '1.25rem', flexWrap: 'wrap' }}>
+                        <button onClick={clearOCR} style={{ flex: 1, minWidth: '120px', padding: '0.6rem', borderRadius: 'var(--radius-lg)', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', color: '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
+                            <RotateCcw size={14} /> New Scan
+                        </button>
+                        <button onClick={copyText} style={{ flex: 1, minWidth: '120px', padding: '0.6rem', borderRadius: 'var(--radius-lg)', border: '1px solid rgba(255,255,255,0.08)', background: copied ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)', color: copied ? '#22c55e' : '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
+                            {copied ? <><Check size={14} /> Copied!</> : <><Clipboard size={14} /> Copy Text</>}
+                        </button>
+                        <button onClick={() => setShowRawText(!showRawText)} style={{ flex: 1, minWidth: '120px', padding: '0.6rem', borderRadius: 'var(--radius-lg)', border: '1px solid rgba(255,255,255,0.08)', background: showRawText ? 'rgba(124,58,237,0.08)' : 'rgba(255,255,255,0.03)', color: showRawText ? '#a855f7' : '#94a3b8', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.3rem', fontSize: '0.85rem' }}>
+                            <Eye size={14} /> {showRawText ? 'Hide' : 'Show'} Raw
+                        </button>
+                    </div>
+
+                    {/* Raw text */}
+                    <AnimatePresence>
+                        {showRawText && (
+                            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} style={{ overflow: 'hidden', marginBottom: '1.25rem' }}>
+                                <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem' }}>
+                                    <h4 style={{ fontSize: '0.9rem', fontWeight: '700', marginBottom: '0.6rem', color: '#a855f7' }}>Raw OCR Output</h4>
+                                    <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.8rem', color: '#94a3b8', lineHeight: '1.6', fontFamily: 'monospace', background: 'rgba(0,0,0,0.2)', padding: '0.8rem', borderRadius: '8px', maxHeight: '250px', overflow: 'auto' }}>
+                                        {ocrResults.rawText || '(no text)'}
+                                    </pre>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
+
+                    {/* ═══ ADVANCED INGREDIENT ANALYSIS ═══ */}
+                    <AdvancedAnalysisPanel ocrResults={ocrResults} />
+                </motion.div>
+            )}
+
+            {/* ── Search Results Header ── */}
             {searchResults.length > 0 && (
                 <div style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <h2 style={{ fontSize: '1.5rem' }}>
-                        {activeFilter ? `Results for "${activeFilter}"` : `Search Results`}
-                    </h2>
-                    <button onClick={clearResults} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                        <X size={18} /> Clear Results
-                    </button>
+                    <h2 style={{ fontSize: '1.5rem' }}>{activeFilter ? `Results for "${activeFilter}"` : 'Search Results'}</h2>
+                    <button onClick={clearResults} style={{ background: 'none', border: 'none', color: 'var(--color-text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.5rem' }}><X size={18} /> Clear</button>
                 </div>
             )}
 
-            {/* Main Content Area (Expert Lists & Categories) - Hide if searching */}
-            {searchResults.length === 0 && !loading && (
+            {/* Expert Lists & Categories */}
+            {searchResults.length === 0 && !loading && !ocrResults && (
                 <>
-                    {/* Expert Curated Lists */}
                     <div style={{ marginBottom: '4rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
                             <Star fill="var(--color-primary)" color="var(--color-primary)" />
                             <h3 style={{ fontSize: '1.5rem', margin: 0 }}>Expert-Curated Lists</h3>
                         </div>
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
-                            {EXPERT_LISTS.map((list) => (
-                                <motion.button
-                                    key={list.id}
-                                    whileHover={{ scale: 1.03 }}
-                                    whileTap={{ scale: 0.98 }}
-                                    onClick={() => handleExpertClick(list.id)}
-                                    className="glass-card"
-                                    style={{
-                                        padding: '1.5rem',
-                                        borderRadius: 'var(--radius-xl)',
-                                        cursor: 'pointer',
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '1rem',
-                                        textAlign: 'left',
-                                        color: '#fff',
-                                        background: `linear-gradient(135deg, ${list.color}15 0%, rgba(255,255,255,0.05) 100%)`,
-                                        border: `1px solid ${list.color}40`
-                                    }}
-                                >
+                            {EXPERT_LISTS.map(list => (
+                                <motion.button key={list.id} whileHover={{ scale: 1.03 }} whileTap={{ scale: 0.98 }}
+                                    onClick={() => handleExpertClick(list.id)} className="glass-card"
+                                    style={{ padding: '1.5rem', borderRadius: 'var(--radius-xl)', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '1rem', textAlign: 'left', color: '#fff', background: `linear-gradient(135deg, ${list.color}15 0%, rgba(255,255,255,0.05) 100%)`, border: `1px solid ${list.color}40` }}>
                                     <div style={{ color: list.color }}><list.icon size={28} /></div>
                                     <div>
                                         <div style={{ fontWeight: '700', fontSize: '1.1rem' }}>{list.name}</div>
@@ -674,25 +583,12 @@ const Scanner = () => {
                         </div>
                     </div>
 
-                    {/* Categories */}
                     <div>
                         <h3 style={{ marginBottom: '1.5rem', fontSize: '1.5rem' }}>Browse by Category</h3>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem' }}>
                             {CATEGORIES.map(cat => (
-                                <button
-                                    key={cat.id}
-                                    onClick={() => handleCategoryClick(cat.id)}
-                                    className="glass-panel"
-                                    style={{
-                                        padding: '0.8rem 1.5rem',
-                                        borderRadius: '50px',
-                                        border: '1px solid rgba(255,255,255,0.1)',
-                                        background: 'rgba(255,255,255,0.03)',
-                                        color: 'var(--color-text)',
-                                        cursor: 'pointer',
-                                        transition: 'all 0.2s'
-                                    }}
-                                >
+                                <button key={cat.id} onClick={() => handleCategoryClick(cat.id)} className="glass-panel"
+                                    style={{ padding: '0.8rem 1.5rem', borderRadius: '50px', border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.03)', color: 'var(--color-text)', cursor: 'pointer', transition: 'all 0.2s' }}>
                                     {cat.name}
                                 </button>
                             ))}
@@ -703,40 +599,19 @@ const Scanner = () => {
 
             {/* Results Grid */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '2rem' }}>
-                {searchResults.map((product) => (
-                    <motion.div
-                        key={product._id}
-                        initial={{ opacity: 0, scale: 0.9 }}
-                        animate={{ opacity: 1, scale: 1 }}
-                        className="glass-card"
-                        style={{ borderRadius: 'var(--radius-xl)', overflow: 'hidden', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column' }}
-                        onClick={() => navigate(`/product/${product._id}`)}
-                    >
+                {searchResults.map(product => (
+                    <motion.div key={product._id} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
+                        className="glass-card" style={{ borderRadius: 'var(--radius-xl)', overflow: 'hidden', cursor: 'pointer', position: 'relative', display: 'flex', flexDirection: 'column' }}
+                        onClick={() => navigate(`/product/${product._id}`)}>
                         <div style={{ padding: '2rem', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', flexGrow: 1 }}>
-                            <img
-                                src={product.image_front_small_url || 'https://placehold.co/200x200?text=No+Image'}
-                                alt={product.product_name}
-                                style={{ maxHeight: '150px', maxWidth: '100%', objectFit: 'contain' }}
-                            />
+                            <img src={product.image_front_small_url || 'https://placehold.co/200x200?text=No+Image'} alt={product.product_name} style={{ maxHeight: '150px', maxWidth: '100%', objectFit: 'contain' }} />
                         </div>
-
-                        <div style={{ padding: '1.5rem', background: 'rgba(15, 23, 42, 0.4)' }}>
-                            {/* Grade Badge */}
-                            <div style={{
-                                position: 'absolute', top: '1rem', right: '1rem',
-                                background: '#fff', color: '#000', fontWeight: '800', width: '36px', height: '36px',
-                                borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 4px 10px rgba(0,0,0,0.1)'
-                            }}>
+                        <div style={{ padding: '1.5rem', background: 'rgba(15,23,42,0.4)' }}>
+                            <div style={{ position: 'absolute', top: '1rem', right: '1rem', background: '#fff', color: '#000', fontWeight: '800', width: '36px', height: '36px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 4px 10px rgba(0,0,0,0.1)' }}>
                                 {product.nutrition_grades?.toUpperCase() || '?'}
                             </div>
-
-                            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {product.product_name || 'Unknown Product'}
-                            </h3>
-                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
-                                {product.brands || 'Unknown Brand'}
-                            </p>
+                            <h3 style={{ fontSize: '1rem', fontWeight: '600', marginBottom: '0.25rem', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{product.product_name || 'Unknown Product'}</h3>
+                            <p style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>{product.brands || 'Unknown Brand'}</p>
                         </div>
                     </motion.div>
                 ))}
@@ -749,6 +624,285 @@ const Scanner = () => {
                 </div>
             )}
         </motion.div>
+    );
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADVANCED ANALYSIS PANEL — full ingredient breakdown
+// ═══════════════════════════════════════════════════════════════════════════════
+const AdvancedAnalysisPanel = ({ ocrResults }) => {
+    const [expandedCat, setExpandedCat] = useState(null);
+    const [showAllIngredients, setShowAllIngredients] = useState(false);
+
+    const analysis = useMemo(() => {
+        if (!ocrResults?.ingredients?.found) return null;
+        return analyzeIngredientList(ocrResults.ingredients.ingredients);
+    }, [ocrResults]);
+
+    if (!ocrResults?.ingredients?.found || !analysis) {
+        return (
+            <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '800', marginBottom: '0.5rem' }}>🧪 Ingredient Analysis</h3>
+                <p style={{ color: '#64748b', fontSize: '0.85rem' }}>No ingredients detected. Try a clearer photo.</p>
+            </div>
+        );
+    }
+
+    const { summary, allergens, hiddenIngredients, categories, isVegetarian, isVegan, ultraProcessedCount, novaGroup, overallRisk, ingredients: analyzedList } = analysis;
+    const nova = NOVA_LABELS[novaGroup];
+    const riskColor = RISK_COLORS[overallRisk];
+    const safePercent = summary.total > 0 ? Math.round((summary.safe / summary.total) * 100) : 0;
+
+    return (
+        <>
+            {/* ── OVERALL RISK SCORE ── */}
+            <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', gap: '1.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                    {/* Risk donut */}
+                    <div style={{ position: 'relative', width: '90px', height: '90px', flexShrink: 0 }}>
+                        <svg viewBox="0 0 36 36" style={{ width: '100%', height: '100%', transform: 'rotate(-90deg)' }}>
+                            <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="3" />
+                            <circle cx="18" cy="18" r="15.9" fill="none" stroke={riskColor.color} strokeWidth="3"
+                                strokeDasharray={`${safePercent} ${100 - safePercent}`} strokeLinecap="round" />
+                        </svg>
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                            <span style={{ fontSize: '1.2rem', fontWeight: '800', color: riskColor.color }}>{safePercent}%</span>
+                            <span style={{ fontSize: '0.55rem', color: '#94a3b8' }}>safe</span>
+                        </div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: '180px' }}>
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: '800', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            🧪 Ingredient Analysis
+                            <span style={{ fontSize: '0.72rem', padding: '0.15rem 0.5rem', borderRadius: '20px', background: riskColor.bg, color: riskColor.color, fontWeight: '600', border: `1px solid ${riskColor.border}` }}>
+                                {overallRisk === 'safe' ? '✅ Safe' : overallRisk === 'moderate' ? '⚠️ Moderate' : '🚫 Risky'}
+                            </span>
+                        </h3>
+                        {/* Counts */}
+                        <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                            {[{ l: `${summary.safe} Safe`, c: '#4ade80' }, { l: `${summary.moderate} Moderate`, c: '#fbbf24' }, { l: `${summary.risky} Risky`, c: '#f87171' }].map(x => (
+                                <span key={x.l} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.78rem', color: x.c, fontWeight: '600' }}>
+                                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: x.c }} />{x.l}
+                                </span>
+                            ))}
+                        </div>
+                        <p style={{ fontSize: '0.78rem', color: '#94a3b8' }}>{summary.total} ingredients analyzed</p>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── STATUS BADGES (Veg/Vegan, NOVA, Ultra-Processed) ── */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '0.75rem', marginBottom: '1.25rem' }}>
+                {/* Veg/Vegan */}
+                <div className="glass-card" style={{ borderRadius: 'var(--radius-lg)', padding: '0.8rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '1.3rem' }}>{isVegan ? '🌿' : isVegetarian ? '🥬' : '🍖'}</span>
+                    <div>
+                        <div style={{ fontSize: '0.82rem', fontWeight: '700', color: isVegan ? '#22c55e' : isVegetarian ? '#4ade80' : '#f59e0b' }}>
+                            {isVegan ? 'Vegan' : isVegetarian ? 'Vegetarian' : 'Non-Vegetarian'}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Diet Status</div>
+                    </div>
+                </div>
+                {/* NOVA */}
+                <div className="glass-card" style={{ borderRadius: 'var(--radius-lg)', padding: '0.8rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: nova.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: '800', fontSize: '1.1rem', color: '#fff' }}>
+                        {novaGroup}
+                    </div>
+                    <div>
+                        <div style={{ fontSize: '0.82rem', fontWeight: '700', color: nova.color }}>{nova.label}</div>
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>NOVA Group</div>
+                    </div>
+                </div>
+                {/* Ultra-processed count */}
+                <div className="glass-card" style={{ borderRadius: 'var(--radius-lg)', padding: '0.8rem 1rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                    <span style={{ fontSize: '1.3rem' }}>⚙️</span>
+                    <div>
+                        <div style={{ fontSize: '0.82rem', fontWeight: '700', color: ultraProcessedCount > 3 ? '#ef4444' : ultraProcessedCount > 0 ? '#f59e0b' : '#22c55e' }}>
+                            {ultraProcessedCount} / {summary.total}
+                        </div>
+                        <div style={{ fontSize: '0.65rem', color: '#94a3b8' }}>Ultra-Processed</div>
+                    </div>
+                </div>
+            </div>
+
+            {/* ── ALLERGEN ALERTS ── */}
+            {allergens.length > 0 && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                    className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem', border: '1px solid rgba(239,68,68,0.2)', background: 'rgba(239,68,68,0.04)' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: '800', marginBottom: '0.6rem', color: '#f87171', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <AlertTriangle size={16} /> Allergen Warning
+                    </h4>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        {allergens.map((a, i) => (
+                            <span key={i} style={{ padding: '0.3rem 0.7rem', borderRadius: '20px', fontSize: '0.8rem', background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.2)', color: '#fca5a5', fontWeight: '600' }}>
+                                {a.label}
+                            </span>
+                        ))}
+                    </div>
+                </motion.div>
+            )}
+
+            {/* ── HIDDEN INGREDIENTS ── */}
+            {hiddenIngredients.length > 0 && (
+                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
+                    className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem', border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.04)' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: '800', marginBottom: '0.6rem', color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Eye size={16} /> Hidden Ingredients Detected
+                    </h4>
+                    <div style={{ display: 'grid', gap: '0.35rem' }}>
+                        {hiddenIngredients.map((h, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', padding: '0.4rem 0.6rem', borderRadius: '8px', background: 'rgba(245,158,11,0.06)' }}>
+                                <span style={{ fontSize: '0.82rem', fontWeight: '600', color: '#fbbf24', minWidth: '100px' }}>{h.ingredient}</span>
+                                <span style={{ fontSize: '0.78rem', color: '#fde68a' }}>→ {h.hiddenAs}</span>
+                            </div>
+                        ))}
+                    </div>
+                </motion.div>
+            )}
+
+            {/* ── CATEGORY BREAKDOWN ── */}
+            <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem' }}>
+                <h4 style={{ fontSize: '0.95rem', fontWeight: '800', marginBottom: '0.8rem' }}>📋 Ingredient Categories</h4>
+                <div style={{ display: 'grid', gap: '0.4rem' }}>
+                    {Object.entries(categories).map(([catKey, cat]) => (
+                        <div key={catKey}>
+                            <button onClick={() => setExpandedCat(expandedCat === catKey ? null : catKey)}
+                                style={{ width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.55rem 0.8rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.06)', background: expandedCat === catKey ? 'rgba(124,58,237,0.06)' : 'rgba(255,255,255,0.02)', color: '#e2e8f0', cursor: 'pointer', fontSize: '0.85rem' }}>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                                    {cat.label}
+                                </span>
+                                <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                                    <span style={{ fontSize: '0.72rem', padding: '0.1rem 0.4rem', borderRadius: '10px', background: 'rgba(255,255,255,0.05)', color: '#94a3b8', fontWeight: '600' }}>{cat.count}</span>
+                                    {expandedCat === catKey ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                </span>
+                            </button>
+                            <AnimatePresence>
+                                {expandedCat === catKey && (
+                                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                                        style={{ overflow: 'hidden', paddingLeft: '1rem' }}>
+                                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', padding: '0.5rem 0' }}>
+                                            {cat.items.map((name, i) => {
+                                                const a = analyzedList.find(x => x.name === name);
+                                                const rc = RISK_COLORS[a?.risk || 'safe'];
+                                                return (
+                                                    <span key={i} style={{ padding: '0.25rem 0.55rem', borderRadius: '16px', fontSize: '0.78rem', background: rc.bg, border: `1px solid ${rc.border}`, color: rc.color, display: 'inline-flex', alignItems: 'center', gap: '0.2rem' }}>
+                                                        {a?.risk === 'risky' && <AlertTriangle size={10} />}
+                                                        {a?.risk === 'safe' && <Check size={10} />}
+                                                        {name}
+                                                    </span>
+                                                );
+                                            })}
+                                        </div>
+                                    </motion.div>
+                                )}
+                            </AnimatePresence>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            {/* ── ALL INGREDIENTS (expandable detail cards) ── */}
+            <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.8rem' }}>
+                    <h4 style={{ fontSize: '0.95rem', fontWeight: '800' }}>🔍 All Ingredients ({summary.total})</h4>
+                    <button onClick={() => setShowAllIngredients(!showAllIngredients)}
+                        style={{ padding: '0.3rem 0.7rem', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)', color: '#94a3b8', cursor: 'pointer', fontSize: '0.78rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        {showAllIngredients ? <><ChevronUp size={12} /> Collapse</> : <><ChevronDown size={12} /> Expand</>}
+                    </button>
+                </div>
+
+                {/* Compact chip view */}
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                    {analyzedList.map((a, i) => {
+                        const rc = RISK_COLORS[a.risk];
+                        return (
+                            <motion.span key={i} initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.015 }}
+                                title={[a.categoryLabel, a.isArtificial ? 'Artificial' : 'Natural', a.note].filter(Boolean).join(' · ')}
+                                style={{ padding: '0.3rem 0.6rem', borderRadius: '20px', fontSize: '0.78rem', background: rc.bg, border: `1px solid ${rc.border}`, color: rc.color, display: 'inline-flex', alignItems: 'center', gap: '0.2rem', cursor: 'help' }}>
+                                {a.risk === 'risky' && <AlertTriangle size={10} />}
+                                {a.risk === 'safe' && <Check size={10} />}
+                                {a.name}
+                                {a.isArtificial && <span style={{ fontSize: '0.6rem', opacity: 0.7 }}>⚗️</span>}
+                            </motion.span>
+                        );
+                    })}
+                </div>
+
+                {/* Expanded detail view */}
+                <AnimatePresence>
+                    {showAllIngredients && (
+                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                            style={{ overflow: 'hidden', marginTop: '0.8rem', borderTop: '1px solid rgba(255,255,255,0.04)', paddingTop: '0.8rem' }}>
+                            <div style={{ display: 'grid', gap: '0.5rem' }}>
+                                {analyzedList.map((a, i) => {
+                                    const rc = RISK_COLORS[a.risk];
+                                    return (
+                                        <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.02 }}
+                                            style={{ padding: '0.7rem 0.9rem', borderRadius: '10px', background: rc.bg, border: `1px solid ${rc.border}` }}>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                                                <div>
+                                                    <span style={{ fontWeight: '700', fontSize: '0.88rem', color: rc.color }}>{a.name}</span>
+                                                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.3rem', marginTop: '0.3rem' }}>
+                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '8px', background: 'rgba(255,255,255,0.05)', color: '#94a3b8' }}>{a.categoryLabel}</span>
+                                                        <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '8px', background: a.isArtificial ? 'rgba(239,68,68,0.08)' : 'rgba(34,197,94,0.08)', color: a.isArtificial ? '#f87171' : '#4ade80' }}>
+                                                            {a.isArtificial ? '⚗️ Artificial' : '🌿 Natural'}
+                                                        </span>
+                                                        {a.isUltraProcessed && <span style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '8px', background: 'rgba(239,68,68,0.08)', color: '#f87171' }}>⚙️ Ultra-Processed</span>}
+                                                        {a.allergens.map((al, j) => (
+                                                            <span key={j} style={{ fontSize: '0.65rem', padding: '0.1rem 0.4rem', borderRadius: '8px', background: 'rgba(239,68,68,0.1)', color: '#fca5a5' }}>{al.label}</span>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <span style={{ fontSize: '0.72rem', fontWeight: '700', color: rc.color, textTransform: 'capitalize', whiteSpace: 'nowrap' }}>{a.risk}</span>
+                                            </div>
+                                            {(a.note || a.hiddenInfo) && (
+                                                <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: '#94a3b8', display: 'flex', alignItems: 'flex-start', gap: '0.3rem' }}>
+                                                    <Info size={11} style={{ marginTop: '0.1rem', flexShrink: 0 }} />
+                                                    <span>{a.hiddenInfo ? `⚠ ${a.hiddenInfo}` : ''}{a.hiddenInfo && a.note ? ' · ' : ''}{a.note || ''}</span>
+                                                </div>
+                                            )}
+                                        </motion.div>
+                                    );
+                                })}
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                {/* Legend */}
+                <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.8rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(255,255,255,0.04)' }}>
+                    {[{ l: 'Safe', c: '#4ade80' }, { l: 'Moderate', c: '#fbbf24' }, { l: 'Risky', c: '#f87171' }, { l: 'Artificial', c: '#94a3b8', icon: '⚗️' }].map(x => (
+                        <span key={x.l} style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.7rem', color: x.c }}>
+                            {x.icon ? <span>{x.icon}</span> : <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: x.c }} />}{x.l}
+                        </span>
+                    ))}
+                </div>
+            </div>
+
+            {/* ── NUTRITION (kept from original) ── */}
+            <div className="glass-card" style={{ borderRadius: 'var(--radius-xl)', padding: '1.25rem' }}>
+                <h3 style={{ fontSize: '1.1rem', fontWeight: '800', marginBottom: '0.8rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    📊 Nutrition
+                    {ocrResults.nutrition.servingSize && <span style={{ fontSize: '0.72rem', color: '#94a3b8', fontWeight: '400' }}>(per {ocrResults.nutrition.servingSize})</span>}
+                </h3>
+                {ocrResults.nutrition.found ? (
+                    <div style={{ display: 'grid', gap: '0.35rem' }}>
+                        {ocrResults.nutrition.items.map((item, i) => {
+                            const dvMap = { 'Energy': 2000, 'Calories': 2000, 'Total Fat': 65, 'Saturated Fat': 20, 'Trans Fat': 2, 'Cholesterol': 300, 'Sodium': 2400, 'Total Carbohydrate': 300, 'Sugar': 50, 'Added Sugar': 25, 'Dietary Fiber': 25, 'Protein': 50 };
+                            const dv = dvMap[item.name]; const pct = dv ? Math.min(100, (item.value / dv) * 100) : null;
+                            const barColor = pct > 75 ? '#ef4444' : pct > 40 ? '#f59e0b' : '#22c55e';
+                            return (
+                                <motion.div key={i} initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.03 }}
+                                    style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', padding: '0.5rem 0.6rem', borderRadius: '8px', background: 'rgba(255,255,255,0.02)', borderBottom: '1px solid rgba(255,255,255,0.03)' }}>
+                                    <span style={{ flex: 1, fontSize: '0.85rem', fontWeight: '500' }}>{item.name}</span>
+                                    <span style={{ fontWeight: '700', fontFamily: 'monospace', fontSize: '0.85rem', color: '#e2e8f0' }}>{item.value}{item.unit}</span>
+                                    {pct !== null && <div style={{ width: '50px', height: '5px', borderRadius: '3px', background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}><div style={{ height: '100%', width: `${pct}%`, borderRadius: '3px', background: barColor }} /></div>}
+                                </motion.div>
+                            );
+                        })}
+                    </div>
+                ) : <p style={{ color: '#64748b', fontSize: '0.85rem' }}>No nutrition table detected. Try a clearer photo.</p>}
+            </div>
+        </>
     );
 };
 

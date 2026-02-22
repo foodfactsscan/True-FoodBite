@@ -5,6 +5,7 @@ import authRoutes from './routes/auth-simple.js';
 import profileRoutes from './routes/profile.js';
 import aiRoutes from './routes/ai.js';
 import productRoutes from './routes/products.js';
+import adminRoutes from './routes/admin.js';
 import { usersDB, profilesDB } from './db.js';
 
 dotenv.config();
@@ -42,6 +43,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/products', productRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
