@@ -143,6 +143,32 @@ const normalizeProduct = (product) => {
         ...n
     };
 
+    // --- DEDUPLICATE NAME & BRAND ---
+    // Universal logic to prevent "Pepsi Pepsi" or "7up 7up"
+    if (product.product_name && product.brands) {
+        const brand = product.brands.split(',')[0].trim().toLowerCase();
+        let name = product.product_name.trim();
+        let nameLower = name.toLowerCase();
+
+        // If name starts with brand + space/separator (e.g. "7up - Sparkling")
+        if (nameLower.startsWith(brand)) {
+            let nextChar = nameLower.charAt(brand.length);
+            // Check if it's a separator or space
+            if (!nextChar || nextChar === ' ' || nextChar === '-' || nextChar === ':') {
+                let stripped = name.substring(brand.length).trim();
+                // Clean up leading separators: "- Sparkling" -> "Sparkling"
+                if (stripped.startsWith('-') || stripped.startsWith(':')) {
+                    stripped = stripped.substring(1).trim();
+                }
+                
+                // Only use if we didn't destroy the name entirely
+                if (stripped.length > 1) {
+                    product.product_name = stripped;
+                }
+            }
+        }
+    }
+
     // Ensure nutrient_levels exists
     if (!product.nutrient_levels) {
         const fat = product.nutriments.fat_100g;
