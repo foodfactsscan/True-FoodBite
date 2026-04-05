@@ -82,7 +82,7 @@ const Navbar = () => {
                                     top: 'calc(100% + 0.5rem)',
                                     right: 0,
                                     minWidth: '200px',
-                                    background: 'var(--gradient-card)',
+                                    background: '#1e293b',
                                     border: '1px solid rgba(255, 255, 255, 0.1)',
                                     borderRadius: 'var(--radius-lg)',
                                     padding: '0.75rem',
