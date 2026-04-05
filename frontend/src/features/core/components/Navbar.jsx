@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Scan, Sun, Moon, User, LogOut } from 'lucide-react';
+import { Scan, Sun, Moon, User, LogOut, Layout } from 'lucide-react';
 import { useTheme } from './ThemeContext';
 import { useAuth } from '../../auth/context/AuthContext';
 import { useState } from 'react';
@@ -20,8 +20,8 @@ const Navbar = () => {
             top: 0,
             left: 0,
             right: 0,
-            padding: '1.5rem',
-            zIndex: 50,
+            padding: '1.5em',
+            zIndex: 1000,
             backdropFilter: 'blur(10px)',
             background: 'var(--color-glass-strong)',
             borderBottom: '1px solid var(--color-glass-border)'
@@ -34,7 +34,7 @@ const Navbar = () => {
                     <Link to="/" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Home</Link>
                     <Link to="/scan" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Scanner</Link>
                     <Link to="/compare" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Compare</Link>
-                    <Link to="/dashboard" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Dashboard</Link>
+                    {isAuthenticated && <Link to="/dashboard" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>Dashboard</Link>}
                     <Link to="/how-it-works" style={{ color: 'var(--color-text)', textDecoration: 'none' }}>How It Works</Link>
 
                     <button
@@ -63,13 +63,14 @@ const Navbar = () => {
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: '0.5rem',
-                                    padding: '0.5rem 1rem',
-                                    background: 'linear-gradient(135deg, rgba(124, 58, 237, 0.2) 0%, rgba(236, 72, 153, 0.2) 100%)',
-                                    border: '1px solid rgba(124, 58, 237, 0.3)',
-                                    borderRadius: 'var(--radius-full)',
+                                    padding: '0.5rem 1.25rem',
+                                    background: 'linear-gradient(135deg, rgba(132, 204, 22, 0.2) 0%, rgba(14, 165, 233, 0.2) 100%)',
+                                    border: '1px solid var(--color-glass-border)',
+                                    borderRadius: '50px',
                                     color: 'var(--color-text)',
                                     cursor: 'pointer',
-                                    fontWeight: '600'
+                                    fontWeight: '700',
+                                    boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
                                 }}
                             >
                                 <User size={18} />
@@ -79,91 +80,71 @@ const Navbar = () => {
                             {showUserMenu && (
                                 <div style={{
                                     position: 'absolute',
-                                    top: 'calc(100% + 0.5rem)',
+                                    top: 'calc(100% + 1rem)',
                                     right: 0,
-                                    minWidth: '200px',
-                                    background: '#1e293b',
+                                    width: '240px',
+                                    backgroundColor: '#1E293B',
                                     border: '1px solid rgba(255, 255, 255, 0.1)',
-                                    borderRadius: 'var(--radius-lg)',
-                                    padding: '0.75rem',
-                                    boxShadow: '0 10px 30px rgba(0, 0, 0, 0.5)'
+                                    borderRadius: '16px',
+                                    padding: '0.5rem',
+                                    boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)',
+                                    zIndex: 9999
                                 }}>
                                     <div style={{
-                                        padding: '0.75rem',
-                                        borderBottom: '1px solid rgba(255, 255, 255, 0.1)',
+                                        padding: '1rem',
+                                        borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
                                         marginBottom: '0.5rem'
                                     }}>
-                                        <p style={{ fontSize: '0.9rem', fontWeight: '600', marginBottom: '0.25rem' }}>
+                                        <p style={{ fontSize: '0.9rem', fontWeight: '800', color: '#FFFFFF', margin: 0 }}>
                                             {user?.firstName} {user?.lastName}
                                         </p>
-                                        <p style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+                                        <p style={{ fontSize: '0.75rem', color: '#94A3B8', marginTop: '4px', margin: '4px 0 0 0' }}>
                                             {user?.email}
                                         </p>
                                     </div>
+
                                     <Link
                                         to="/profile"
                                         onClick={() => setShowUserMenu(false)}
                                         style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.5rem',
-                                            padding: '0.75rem',
-                                            color: 'var(--color-text)',
-                                            textDecoration: 'none',
-                                            fontSize: '0.9rem',
-                                            fontWeight: '500',
-                                            transition: 'background 0.2s',
-                                            borderRadius: 'var(--radius-md)'
+                                            display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                            padding: '1rem', color: '#E2E8F0', textDecoration: 'none',
+                                            fontSize: '0.9rem', fontWeight: '600', borderRadius: '12px',
+                                            transition: 'all 0.2s'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
-                                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                                     >
-                                        <User size={18} />
-                                        My Profile
+                                        <User size={18} /> My Profile
                                     </Link>
+
                                     <Link
                                         to="/dashboard"
                                         onClick={() => setShowUserMenu(false)}
                                         style={{
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.5rem',
-                                            padding: '0.75rem',
-                                            color: 'var(--color-text)',
-                                            textDecoration: 'none',
-                                            fontSize: '0.9rem',
-                                            fontWeight: '500',
-                                            transition: 'background 0.2s',
-                                            borderRadius: 'var(--radius-md)'
+                                            display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                            padding: '1rem', color: '#E2E8F0', textDecoration: 'none',
+                                            fontSize: '0.9rem', fontWeight: '600', borderRadius: '12px',
+                                            transition: 'all 0.2s'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)'}
-                                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                                     >
-                                        <Activity size={18} />
-                                        Dashboard
+                                        <Layout size={18} /> Dashboard
                                     </Link>
+
                                     <button
                                         onClick={handleLogout}
                                         style={{
-                                            width: '100%',
-                                            display: 'flex',
-                                            alignItems: 'center',
-                                            gap: '0.5rem',
-                                            padding: '0.75rem',
-                                            background: 'transparent',
-                                            border: 'none',
-                                            color: '#ef4444',
-                                            cursor: 'pointer',
-                                            borderRadius: 'var(--radius-md)',
-                                            fontSize: '0.9rem',
-                                            fontWeight: '600',
-                                            transition: 'background 0.3s'
+                                            width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                            padding: '0.75rem', background: 'transparent', border: 'none',
+                                            color: '#f87171', cursor: 'pointer', borderRadius: '8px',
+                                            fontSize: '0.85rem', fontWeight: '700', transition: 'all 0.2s'
                                         }}
-                                        onMouseEnter={(e) => e.currentTarget.style.background = 'rgba(239, 68, 68, 0.1)'}
-                                        onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+                                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(248, 113, 113, 0.1)'}
+                                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                                     >
-                                        <LogOut size={18} />
-                                        Logout
+                                        <LogOut size={16} /> Logout
                                     </button>
                                 </div>
                             )}

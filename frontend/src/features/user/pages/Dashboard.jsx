@@ -75,19 +75,19 @@ const Dashboard = () => {
             {/* Daily Summary Quick View */}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
                 <SummaryCard
-                    label="Calories" value={Math.round(intakeData.summary.calories)} limit={rda.calories} unit="kcal"
+                    label="Calories" value={Math.round(intakeData?.summary?.calories || 0)} limit={rda.calories} unit="kcal"
                     icon={<Flame size={20} color="#f87171" />} color="#ef4444"
                 />
                 <SummaryCard
-                    label="Sugar" value={intakeData.summary.sugar.toFixed(1)} limit={rda.sugar} unit="g"
+                    label="Sugar" value={(intakeData?.summary?.sugar || 0).toFixed(1)} limit={rda.sugar} unit="g"
                     icon={<Cookie size={20} color="#fbbf24" />} color="#f59e0b"
                 />
                 <SummaryCard
-                    label="Protein" value={intakeData.summary.protein.toFixed(1)} limit={rda.protein} unit="g"
+                    label="Protein" value={(intakeData?.summary?.protein || 0).toFixed(1)} limit={rda.protein} unit="g"
                     icon={<Zap size={20} color="#4ade80" />} color="#10b981"
                 />
                 <SummaryCard
-                    label="Salt" value={intakeData.summary.salt.toFixed(1)} limit={rda.salt} unit="g"
+                    label="Salt" value={(intakeData?.summary?.salt || 0).toFixed(1)} limit={rda.salt} unit="g"
                     icon={<Droplets size={20} color="#60a5fa" />} color="#3b82f6"
                 />
             </div>
@@ -222,8 +222,8 @@ const IntakeTab = ({ data, selectedDate, setSelectedDate, onDelete }) => (
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
                             <div style={{ textAlign: 'right' }}>
-                                <div style={{ fontWeight: '800', color: '#f87171' }}>{Math.round(entry.nutrients.calories)} kcal</div>
-                                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{entry.nutrients.sugar.toFixed(1)}g sugar</div>
+                                <div style={{ fontWeight: '800', color: '#f87171' }}>{Math.round(entry?.nutrients?.calories || 0)} kcal</div>
+                                <div style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{(entry?.nutrients?.sugar || 0).toFixed(1)}g sugar</div>
                             </div>
                             <button
                                 onClick={() => onDelete(entry.timestamp)}

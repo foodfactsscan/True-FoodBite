@@ -10,6 +10,13 @@ class ErrorBoundary extends React.Component {
         return { hasError: true, error };
     }
 
+    componentDidUpdate(prevProps) {
+        // If the location changed, reset the error state to let user try a different page
+        if (this.state.hasError) {
+            this.setState({ hasError: false, error: null });
+        }
+    }
+
     componentDidCatch(error, errorInfo) {
         console.error('Error caught by boundary:', error, errorInfo);
     }
