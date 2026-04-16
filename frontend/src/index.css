@@ -77,6 +77,7 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+  padding-top: 56px; /* matches slim navbar height */
 }
 
 /* Utilities */
@@ -206,4 +207,48 @@ body {
 
 .animate-pulse {
   animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Product Details Layout */
+.product-grid {
+  display: grid;
+  grid-template-columns: 400px 1fr;
+  gap: 4rem;
+  align-items: flex-start;
+}
+
+.sticky-image-container {
+  position: sticky;
+  top: 100px;
+  z-index: 10;
+  transition: all 0.3s ease;
+}
+
+@media (max-width: 1024px) {
+  .product-grid {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  
+  .sticky-image-container {
+    position: relative;
+    top: 0;
+    order: -1;
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  
+  .product-title-main {
+    font-size: 2.5rem !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .product-grid {
+    gap: 1.5rem;
+  }
+  
+  .product-title-main {
+    font-size: 2rem !important;
+  }
 }

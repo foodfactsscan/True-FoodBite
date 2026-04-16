@@ -253,40 +253,34 @@ export const getProductByBarcode = async (barcode) => {
 
     console.log(`🔍 Searching for barcode: ${barcode}`);
 
-    // STEP 1: Check local Indian DB first (instant, 0ms)
+    console.log('🔄 Step 1: Checking local Indian DB...');
     let localProduct = null;
     if (INDIAN_PRODUCTS_DB[barcode]) {
-        console.log('✅ Found in local Indian DB:', barcode);
+        console.log('✅ Match found in local Indian DB');
         localProduct = { ...INDIAN_PRODUCTS_DB[barcode] };
     }
 
-    // STEP 2: Query multiple OpenFoodFacts sources IN PARALLEL
+    console.log('🔄 Step 2: Querying OpenFoodFacts APIs...');
     const isIndianBarcode = barcode.startsWith('890');
-
     const apiCalls = [
-        // World API v0 (most complete)
-        quickFetch(`${PRODUCT_URL_V0}/${barcode}.json`),
-        // World API v2 (newer data format)
-        quickFetch(`${PRODUCT_URL_V2}/${barcode}?fields=product_name,brands,image_front_url,nutrition_grades,nova_group,nutriments,nutrient_levels,ingredients_text,allergens_tags,labels_tags,categories,categories_tags,additives_tags,ingredients_analysis_tags,quantity,serving_size,serving_quantity`),
+        quickFetch(`${PRODUCT_URL_V0}/${barcode}.json`, 5000),
+        quickFetch(`${PRODUCT_URL_V2}/${barcode}?fields=product_name,brands,image_front_url,nutrition_grades,nova_group,nutriments,nutrient_levels,ingredients_text,allergens_tags,labels_tags,categories,categories_tags,additives_tags,ingredients_analysis_tags,quantity,serving_size,serving_quantity`, 5000),
     ];
 
-    // Add India-specific API for Indian barcodes
     if (isIndianBarcode) {
-        apiCalls.push(quickFetch(`${INDIA_PRODUCT_URL}/${barcode}.json`));
+        apiCalls.push(quickFetch(`${INDIA_PRODUCT_URL}/${barcode}.json`, 5000));
     }
 
     try {
         const results = await Promise.all(apiCalls);
-
         let bestProduct = localProduct;
 
-        // Check each API result
         for (const data of results) {
             if (data && data.status === 1 && data.product && hasGoodData(data.product)) {
+                console.log('✅ Found product via OpenFoodFacts API');
                 if (!bestProduct || !hasGoodData(bestProduct)) {
                     bestProduct = data.product;
                 } else {
-                    // Merge for most complete data
                     bestProduct = mergeProducts(bestProduct, data.product);
                 }
             }
@@ -296,70 +290,47 @@ export const getProductByBarcode = async (barcode) => {
             const normalized = normalizeProduct(bestProduct);
             const result = { status: 1, product: normalized };
             setCache(cacheKey, result);
-            console.log('✅ Product found:', normalized.product_name);
             return result;
         }
-
-        // If we have a local product even if API failed
-        if (localProduct) {
-            const normalized = normalizeProduct(localProduct);
-            const result = { status: 1, product: normalized };
-            setCache(cacheKey, result);
-            return result;
-        }
-
     } catch (error) {
-        console.warn('API calls failed:', error.message);
-
-        // Return local product if available
-        if (localProduct) {
-            const normalized = normalizeProduct(localProduct);
-            const result = { status: 1, product: normalized };
-            setCache(cacheKey, result);
-            return result;
-        }
+        console.warn('⚠️ API calls failed:', error.message);
     }
 
-    // STEP 3: Try one more time with direct v0 call (with retries)
+    console.log('🔄 Step 3: Trying high-priority retry...');
     try {
-        const response = await fetchWithTimeout(`${PRODUCT_URL_V0}/${barcode}.json`, 15000, 3);
+        const response = await fetchWithTimeout(`${PRODUCT_URL_V0}/${barcode}.json`, 8000, 1);
         const data = await response.json();
         if (data.status === 1 && data.product) {
             const normalized = normalizeProduct(data.product);
             const result = { status: 1, product: normalized };
             setCache(cacheKey, result);
-            console.log('✅ Product found on retry:', normalized.product_name);
+            console.log('✅ Found product on retry');
             return result;
         }
     } catch (error) {
-        console.warn('Retry also failed:', error.message);
+        console.warn('⚠️ Retry failed');
     }
 
-    // STEP 5: AI Fallback - Use Gemini to search for product
-    console.log('🤖 Trying AI-powered search...');
+    console.log('🔄 Step 4: AI Fallback Search...');
     try {
         const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
-        const response = await fetch(`${BACKEND_URL}/api/products/${barcode}`);
+        const response = await fetchWithTimeout(`${BACKEND_URL}/api/products/${barcode}`, 8000);
 
-        if (response.ok) {
+        if (response && response.ok) {
             const data = await response.json();
             if (data.status === 1 && data.product) {
                 const normalized = normalizeProduct(data.product);
-                const result = {
-                    status: 1,
-                    product: { ...normalized, ai_generated: true }
-                };
-                setCache(cacheKey, result, 7200000); // Cache for 2 hours only
-                console.log('✅ AI found product:', normalized.product_name);
+                console.log('✅ Found product via AI');
+                const result = { status: 1, product: { ...normalized, ai_generated: true } };
+                setCache(cacheKey, result, 7200000);
                 return result;
             }
         }
     } catch (error) {
-        console.warn('AI search failed:', error.message);
+        console.warn('⚠️ AI search failed');
     }
 
-    // STEP 6: Product not found anywhere
-    console.log('❌ Product not found:', barcode);
+    console.log('❌ All search steps exhausted. Product not found.');
     return null;
 };
 

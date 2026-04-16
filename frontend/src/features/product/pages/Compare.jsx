@@ -3,7 +3,6 @@ import { motion } from 'framer-motion';
 import { ArrowLeftRight, Search, X, Package, Loader2, Trophy, ArrowRight } from 'lucide-react';
 import { getProductByBarcode, searchProducts } from '../../core/services/api';
 import { calculateHealthScore } from '../services/healthScoreEngine';
-import { calculateTruthInRating } from '../services/ratingEngine';
 
 const styles = {
     page: {

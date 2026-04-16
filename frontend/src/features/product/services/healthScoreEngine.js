@@ -164,9 +164,7 @@ export function detectAdditives(ingredientText) {
 
 /**
  * Calculate a comprehensive health score (0–100)
- * @param {object} product - Product data from OpenFoodFacts
- * @param {object} [userProfile] - Optional user health profile
- * @returns {object} { score, grade, breakdown, summary, personalVerdicts }
+ * Aligned with Nutri-Score 2024 (Solid/Beverage) + Indian Food Safety Context
  */
 export function calculateHealthScore(product, userProfile = null) {
     if (!product) return { score: 0, grade: 'E', summary: 'No product data available.' };
@@ -175,183 +173,163 @@ export function calculateHealthScore(product, userProfile = null) {
     const levels = product.nutrient_levels || {};
     const novaGroup = product.nova_group || null;
     const ingredientText = (product.ingredients_text || '').toLowerCase();
+    
+    // Determine if it's a beverage (Beverages have MUCH stricter sugar rules)
+    const categoryTags = (product.categories_tags || []).join(' ').toLowerCase();
+    const isBeverage = categoryTags.includes('beverage') || 
+                       categoryTags.includes('drink') || 
+                       categoryTags.includes('soda') || 
+                       categoryTags.includes('juice') ||
+                       categoryTags.includes('liquid');
 
     // ── 1. Nutrition score (0–40 points) ─────────────────────────────────────
-    let nutritionScore = 20; // start neutral
+    let nutritionScore = 15; // Start conservative
 
-    // Sugar (max -12)
+    // SUGARS (Strictest Nutri-Score 2024 thresholds)
     const sugar100g = nutriments.sugars_100g ?? null;
     if (sugar100g !== null) {
-        if (sugar100g > 22.5) nutritionScore -= 12;
-        else if (sugar100g > 12) nutritionScore -= 8;
-        else if (sugar100g > 5) nutritionScore -= 4;
-        else nutritionScore += 5; // reward low sugar
-    } else if (levels.sugars === 'high') nutritionScore -= 10;
-    else if (levels.sugars === 'moderate') nutritionScore -= 5;
-
-    // Salt / sodium (max -10)
-    const sodium100g = nutriments.sodium_100g ?? (nutriments.salt_100g ? nutriments.salt_100g / 2.5 : null);
-    if (sodium100g !== null) {
-        if (sodium100g > 0.6) nutritionScore -= 10;
-        else if (sodium100g > 0.3) nutritionScore -= 6;
-        else if (sodium100g > 0.1) nutritionScore -= 2;
-        else nutritionScore += 3;
-    } else if (levels.salt === 'high') nutritionScore -= 8;
-    else if (levels.salt === 'moderate') nutritionScore -= 4;
-
-    // Saturated fat (max -8)
-    const satFat = nutriments['saturated-fat_100g'] ?? null;
-    if (satFat !== null) {
-        if (satFat > 5) nutritionScore -= 8;
-        else if (satFat > 2) nutritionScore -= 4;
-        else nutritionScore += 2;
-    } else if (levels['saturated-fat'] === 'high') nutritionScore -= 7;
-    else if (levels['saturated-fat'] === 'moderate') nutritionScore -= 3;
-
-    // Calories (max -5)
-    const kcal = nutriments['energy-kcal_100g'] ?? null;
-    if (kcal !== null) {
-        if (kcal > 400) nutritionScore -= 5;
-        else if (kcal > 250) nutritionScore -= 2;
+        if (isBeverage) {
+            if (sugar100g > 10) nutritionScore -= 20; // Beverages are punished hard
+            else if (sugar100g > 6) nutritionScore -= 12;
+            else if (sugar100g > 3) nutritionScore -= 6;
+            else if (sugar100g <= 0.5) nutritionScore += 5;
+        } else {
+            if (sugar100g > 45) nutritionScore -= 15;
+            else if (sugar100g > 25) nutritionScore -= 10;
+            else if (sugar100g > 10) nutritionScore -= 5;
+            else if (sugar100g <= 2) nutritionScore += 5;
+        }
     }
 
-    // Protein reward (max +6)
-    const protein = nutriments.proteins_100g ?? 0;
-    if (protein >= 20) nutritionScore += 6;
-    else if (protein >= 10) nutritionScore += 4;
-    else if (protein >= 5) nutritionScore += 2;
+    // SODIUM / SALT (-15 max)
+    const sodium100g = nutriments.sodium_100g ?? (nutriments.salt_100g ? nutriments.salt_100g / 2.5 : null);
+    if (sodium100g !== null) {
+        if (sodium100g > 0.9) nutritionScore -= 15; // Extreme salt
+        else if (sodium100g > 0.4) nutritionScore -= 10;
+        else if (sodium100g > 0.2) nutritionScore -= 5;
+        else if (sodium100g <= 0.05) nutritionScore += 3;
+    }
 
-    // Fibre reward (max +5)
+    // SATURATED FAT (-10 max)
+    const satFat = nutriments['saturated-fat_100g'] ?? null;
+    if (satFat !== null) {
+        if (satFat > 10) nutritionScore -= 10;
+        else if (satFat > 4) nutritionScore -= 6;
+        else if (satFat > 2) nutritionScore -= 3;
+        else if (satFat <= 1) nutritionScore += 2;
+    }
+
+    // PROTEIN & FIBER REWARDS (+10 max)
+    const protein = nutriments.proteins_100g ?? 0;
     const fiber = nutriments.fiber_100g ?? 0;
-    if (fiber >= 6) nutritionScore += 5;
-    else if (fiber >= 3) nutritionScore += 3;
-    else if (fiber >= 1) nutritionScore += 1;
+    if (protein > 15) nutritionScore += 5;
+    else if (protein > 5) nutritionScore += 2;
+    
+    if (fiber > 6) nutritionScore += 5;
+    else if (fiber > 3) nutritionScore += 2;
 
     nutritionScore = Math.max(0, Math.min(40, nutritionScore));
 
     // ── 2. Processing score (0–25 points) ────────────────────────────────────
-    let processingScore = 12; // neutral
-    if (novaGroup === 1) processingScore = 25;
-    else if (novaGroup === 2) processingScore = 18;
-    else if (novaGroup === 3) processingScore = 10;
-    else if (novaGroup === 4) processingScore = 2;
+    let processingScore = 15; // neutral
+    if (novaGroup === 1) processingScore = 25; // Unprocessed
+    else if (novaGroup === 2) processingScore = 18; // Culinary ingredients
+    else if (novaGroup === 3) processingScore = 10; // Processed
+    else if (novaGroup === 4) processingScore = 0;  // Ultra Processed - 0 points automatically
 
-    // Penalize ultra-processed markers in text
-    const ultraProcessedMarkers = ['hydrogenated', 'modified starch', 'maltodextrin', 'high fructose',
-        'corn syrup', 'artificial', 'aspartame', 'acesulfame', 'dextrose', 'polydextrose'];
-    const markerCount = ultraProcessedMarkers.filter(m => ingredientText.includes(m)).length;
-    processingScore = Math.max(0, processingScore - markerCount * 2);
-    processingScore = Math.min(25, processingScore);
+    // Detect hidden markers of ultra-processing
+    const upfMarkers = ['hydrogenated', 'maltodextrin', 'dextrose', 'inverted sugar', 'syrup', 'artificial flavour', 'emulsifier'];
+    const foundMarkers = upfMarkers.filter(m => ingredientText.includes(m));
+    processingScore = Math.max(0, processingScore - foundMarkers.length * 2.5);
 
     // ── 3. Additives score (0–20 points) ──────────────────────────────────────
     let additivesScore = 20;
-    const highRiskCount = ADDITIVE_RISK.high.filter(a => ingredientText.includes(a)).length;
-    const modRiskCount = ADDITIVE_RISK.moderate.filter(a => ingredientText.includes(a)).length;
-    additivesScore -= highRiskCount * 4;
-    additivesScore -= modRiskCount * 1.5;
+    const allAdditives = detectAdditives(ingredientText);
+    
+    allAdditives.forEach(a => {
+        if (a.risk === 'high') additivesScore -= 6;
+        else if (a.risk === 'moderate') additivesScore -= 2;
+    });
+    
     additivesScore = Math.max(0, Math.min(20, additivesScore));
 
     // ── 4. Ingredient quality (0–15 points) ───────────────────────────────────
-    let ingredientScore = 8; // neutral
-    const wholeMarkers = ['whole grain', 'whole wheat', 'oats', 'brown rice', 'quinoa', 'vegetables',
-        'fruits', 'nuts', 'seeds', 'legumes', 'lentils', 'chickpea'];
-    const refinedMarkers = ['refined', 'white flour', 'maida', 'palm oil', 'corn syrup',
-        'margarine', 'shortening'];
+    let ingredientScore = 7; // Neutral
+    
+    // INDIAN CONTEXT PENALTIES
+    if (ingredientText.includes('maida') || ingredientText.includes('refined wheat')) ingredientScore -= 5;
+    if (ingredientText.includes('palm oil') || ingredientText.includes('vegetable fat (palm)')) ingredientScore -= 4;
+    
+    // WHOLE FOOD REWARDS
+    const wholeFoods = ['whole wheat', 'multigrain', 'millet', 'ragi', 'jowar', 'seeds', 'oats', 'chickpea', 'lentil'];
+    const foundWhole = wholeFoods.filter(w => ingredientText.includes(w));
+    ingredientScore += foundWhole.length * 2.5;
 
-    const wholeCount = wholeMarkers.filter(w => ingredientText.includes(w)).length;
-    const refinedCount = refinedMarkers.filter(r => ingredientText.includes(r)).length;
-    ingredientScore += wholeCount * 2;
-    ingredientScore -= refinedCount * 3;
     ingredientScore = Math.max(0, Math.min(15, ingredientScore));
 
     // ── Total score ──────────────────────────────────────────────────────────
     let totalScore = Math.round(nutritionScore + processingScore + additivesScore + ingredientScore);
     totalScore = Math.max(0, Math.min(100, totalScore));
 
-    // ── Grade mapping ─────────────────────────────────────────────────────────
+    // ── Grade mapping (Scientific Grade Logic) ─────────────────────────────────
     let grade, gradeColor, gradeLabel;
-    if (totalScore >= 80) { grade = 'A'; gradeColor = '#22c55e'; gradeLabel = 'Excellent'; }
-    else if (totalScore >= 65) { grade = 'B'; gradeColor = '#84cc16'; gradeLabel = 'Good'; }
-    else if (totalScore >= 45) { grade = 'C'; gradeColor = '#eab308'; gradeLabel = 'Average'; }
-    else if (totalScore >= 25) { grade = 'D'; gradeColor = '#f97316'; gradeLabel = 'Poor'; }
-    else { grade = 'E'; gradeColor = '#ef4444'; gradeLabel = 'Avoid'; }
+    if (totalScore >= 75) { grade = 'A'; gradeColor = '#22c55e'; gradeLabel = 'Superior'; }
+    else if (totalScore >= 60) { grade = 'B'; gradeColor = '#84cc16'; gradeLabel = 'Healthy Choice'; }
+    else if (totalScore >= 40) { grade = 'C'; gradeColor = '#eab308'; gradeLabel = 'Cautionary'; }
+    else if (totalScore >= 20) { grade = 'D'; gradeColor = '#f97316'; gradeLabel = 'Poor Health Profile'; }
+    else { grade = 'E'; gradeColor = '#ef4444'; gradeLabel = 'Highly Processed / Avoid'; }
 
     // ── Summary report text ───────────────────────────────────────────────────
-    const summaryParts = [];
-    if (totalScore >= 80) summaryParts.push('✅ Good for daily consumption');
-    else if (totalScore >= 65) summaryParts.push('👍 Suitable for regular use with moderation');
-    else if (totalScore >= 45) summaryParts.push('⚠️ Occasional consumption recommended');
-    else if (totalScore >= 25) summaryParts.push('🔶 Use sparingly — significant health concerns');
-    else summaryParts.push('🛑 Not recommended — multiple health red flags');
+    const summary = [];
+    if (grade === 'A' || grade === 'B') summary.push(`✅ ${gradeLabel} - Safe for frequent consumption.`);
+    else if (grade === 'C') summary.push(`⚠️ ${gradeLabel} - Limit intake due to nutritional imbalances.`);
+    else summary.push(`🛑 ${gradeLabel} - Multiple high-risk ingredients detected.`);
 
-    if (sugar100g > 15) summaryParts.push('🍬 Very high in sugar');
-    if (sodium100g > 0.5) summaryParts.push('🧂 High sodium content');
-    if (satFat > 5) summaryParts.push('🥓 High in saturated fat');
-    if (novaGroup === 4) summaryParts.push('🏭 Ultra-processed (NOVA 4)');
-    if (highRiskCount > 0) summaryParts.push(`⚗️ Contains ${highRiskCount} high-risk additive(s)`);
-    if (wholeCount > 0) summaryParts.push(`🌿 Contains whole/natural ingredients`);
-    if (protein >= 10) summaryParts.push('💪 Good protein source');
-    if (fiber >= 3) summaryParts.push('🌾 Good fibre source');
+    if (sugar100g > (isBeverage ? 6 : 20)) summary.push('🍬 Sugar overload detected');
+    if (sodium100g > 0.4) summary.push('🧂 High sodium (Salt) impact');
+    if (ingredientText.includes('palm oil')) summary.push('🌴 Contains Palm Oil (Saturated Fat & Environment)');
+    if (ingredientText.includes('maida')) summary.push('🌾 Refined Maida: Zero fiber calories');
+    if (novaGroup === 4) summary.push('🏭 Industrial UPF (Ultra Processed Food)');
+    if (fiber > 4) summary.push('🌾 Excellent Fibre Source');
+    if (protein > 10) summary.push('💪 High Protein Quality');
 
     // ── Personalized verdicts ─────────────────────────────────────────────────
     const personalVerdicts = [];
     if (userProfile) {
-        const conditions = [
-            ...(userProfile.chronicDiseases || []),
-            ...(userProfile.temporaryIssues || []),
-        ];
-
-        if (conditions.includes('diabetes') || conditions.includes('Diabetes')) {
-            if (sugar100g > 5) personalVerdicts.push({ condition: 'Diabetes', verdict: '🚫 Avoid — high sugar content', severity: 'danger' });
-            else if (sugar100g > 2) personalVerdicts.push({ condition: 'Diabetes', verdict: '⚠️ Use with caution — moderate sugar', severity: 'warning' });
-            else personalVerdicts.push({ condition: 'Diabetes', verdict: '✅ Safe for diabetics — low sugar', severity: 'safe' });
+        const userConditions = [...(userProfile.chronicDiseases || []), ...(userProfile.temporaryIssues || [])].map(c => c.toLowerCase());
+        
+        if (userConditions.some(c => c.includes('diab'))) {
+            if (sugar100g > 5) personalVerdicts.push({ condition: 'Diabetes', verdict: '🚫 Dangerous sugar spike risk', severity: 'danger' });
+            else if (sugar100g < 1) personalVerdicts.push({ condition: 'Diabetes', verdict: '✅ Diabetic safe glycemic profile', severity: 'safe' });
+        }
+        
+        if (userConditions.some(c => c.includes('pressure') || c.includes('hyperten'))) {
+            if (sodium100g > 0.3) personalVerdicts.push({ condition: 'Hypertension', verdict: '🚫 Risk: Elevates blood pressure', severity: 'danger' });
+            else if (sodium100g < 0.1) personalVerdicts.push({ condition: 'Hypertension', verdict: '✅ Low sodium - Heart safe', severity: 'safe' });
         }
 
-        if (conditions.includes('hypertension') || conditions.includes('Hypertension') || conditions.includes('High Blood Pressure')) {
-            if (sodium100g > 0.4) personalVerdicts.push({ condition: 'Blood Pressure', verdict: '🚫 Avoid — high sodium', severity: 'danger' });
-            else if (sodium100g > 0.2) personalVerdicts.push({ condition: 'Blood Pressure', verdict: '⚠️ Moderate sodium — limit intake', severity: 'warning' });
-            else personalVerdicts.push({ condition: 'Blood Pressure', verdict: '✅ Low sodium — safe for BP', severity: 'safe' });
+        if (userConditions.some(c => c.includes('weight') || c.includes('obesity'))) {
+            if (novaGroup === 4 || (nutriments['energy-kcal_100g'] > 350)) 
+                personalVerdicts.push({ condition: 'Weight Control', verdict: '🚫 High calorie density / UPF', severity: 'danger' });
         }
 
-        if (conditions.includes('heart-disease') || conditions.includes('Heart Disease')) {
-            if (satFat > 3 || ingredientText.includes('hydrogenated') || ingredientText.includes('trans fat'))
-                personalVerdicts.push({ condition: 'Heart Health', verdict: '🚫 Avoid — high saturated/trans fat', severity: 'danger' });
-            else personalVerdicts.push({ condition: 'Heart Health', verdict: '✅ Heart-friendly', severity: 'safe' });
+        if (userConditions.some(c => c.includes('pcos') || c.includes('pcod'))) {
+            if (ingredientText.includes('refined') || ingredientText.includes('sugar'))
+                personalVerdicts.push({ condition: 'PCOS/PCOD', verdict: '🚫 Insulin disruptive ingredients', severity: 'danger' });
         }
 
-        if (conditions.includes('obesity') || conditions.includes('Obesity')) {
-            if (kcal > 300) personalVerdicts.push({ condition: 'Weight', verdict: '🚫 Very high calorie density', severity: 'danger' });
-            else if (kcal > 200) personalVerdicts.push({ condition: 'Weight', verdict: '⚠️ Moderate calories — watch portions', severity: 'warning' });
-            else personalVerdicts.push({ condition: 'Weight', verdict: '✅ Low calorie — weight-friendly', severity: 'safe' });
+        if (userConditions.some(c => c.includes('celiac') || c.includes('gluten'))) {
+            const glutenIn = ['wheat', 'barley', 'rye', 'gluten', 'semolina', 'maida'];
+            if (glutenIn.some(g => ingredientText.includes(g)))
+                personalVerdicts.push({ condition: 'Celiac Disease', verdict: '🚫 Contains Gluten - Not Safe', severity: 'danger' });
+            else personalVerdicts.push({ condition: 'Gluten Free', verdict: '✅ Safe for Celiac consumption', severity: 'safe' });
         }
 
-        if (conditions.includes('pcod-pcos') || conditions.includes('PCOS/PCOD')) {
-            if (sugar100g > 5 || ingredientText.includes('refined') || ingredientText.includes('maida'))
-                personalVerdicts.push({ condition: 'PCOS', verdict: '🚫 Avoid — high sugar/refined ingredients', severity: 'danger' });
-            else personalVerdicts.push({ condition: 'PCOS', verdict: '✅ PCOS-friendly', severity: 'safe' });
-        }
-
-        if (conditions.includes('celiac-disease') || conditions.includes('Celiac Disease')) {
-            if (['wheat', 'barley', 'rye', 'gluten', 'semolina', 'maida'].some(g => ingredientText.includes(g)))
-                personalVerdicts.push({ condition: 'Celiac', verdict: '🚫 Contains gluten — not safe', severity: 'danger' });
-            else personalVerdicts.push({ condition: 'Celiac', verdict: '✅ Gluten-free — safe for celiac', severity: 'safe' });
-        }
-
-        if (conditions.includes('lactose-intolerance') || conditions.includes('Lactose Intolerance')) {
-            if (['milk', 'cream', 'cheese', 'butter', 'whey', 'casein', 'lactose'].some(d => ingredientText.includes(d)))
-                personalVerdicts.push({ condition: 'Lactose', verdict: '🚫 Contains dairy — may cause issues', severity: 'danger' });
-            else personalVerdicts.push({ condition: 'Lactose', verdict: '✅ Dairy-free — lactose safe', severity: 'safe' });
-        }
-
-        // Goal-based verdicts
-        const goal = userProfile.goal;
-        if (goal === 'weight-loss' || goal === 'Weight Loss') {
-            if (kcal > 250) personalVerdicts.push({ condition: 'Weight Loss Goal', verdict: '⚠️ High calorie — not ideal for weight loss', severity: 'warning' });
-            else if (protein >= 10 && fiber >= 3) personalVerdicts.push({ condition: 'Weight Loss Goal', verdict: '✅ High protein + fibre — great for weight loss!', severity: 'safe' });
-        }
-        if (goal === 'muscle-gain' || goal === 'Muscle Gain') {
-            if (protein >= 15) personalVerdicts.push({ condition: 'Muscle Gain Goal', verdict: '✅ High protein — great for muscle gain!', severity: 'safe' });
-            else if (protein < 5) personalVerdicts.push({ condition: 'Muscle Gain Goal', verdict: '⚠️ Low protein — not ideal for muscle gain', severity: 'warning' });
+        if (userConditions.some(c => c.includes('lactose') || c.includes('dairy'))) {
+            const dairyIn = ['milk', 'cheese', 'whey', 'casein', 'lactose', 'cream', 'butter'];
+            if (dairyIn.some(d => ingredientText.includes(d)))
+                personalVerdicts.push({ condition: 'Lactose Intolerance', verdict: '🚫 Contains Dairy - Trigger risk', severity: 'danger' });
+            else personalVerdicts.push({ condition: 'Dairy Free', verdict: '✅ Safe for Lactose intolerance', severity: 'safe' });
         }
     }
 
@@ -361,13 +339,13 @@ export function calculateHealthScore(product, userProfile = null) {
         gradeColor,
         gradeLabel,
         breakdown: {
-            nutrition: { score: nutritionScore, max: 40, label: 'Nutrition Quality' },
-            processing: { score: processingScore, max: 25, label: 'Processing Level' },
-            additives: { score: additivesScore, max: 20, label: 'Additive Safety' },
-            ingredients: { score: ingredientScore, max: 15, label: 'Ingredient Quality' },
+            nutrition: { score: Math.round(nutritionScore), max: 40, label: 'Nutrition Profiling' },
+            processing: { score: Math.round(processingScore), max: 25, label: 'Processing Index' },
+            additives: { score: Math.round(additivesScore), max: 20, label: 'Additive Risk' },
+            ingredients: { score: Math.round(ingredientScore), max: 15, label: 'Quality Index' }
         },
-        summary: summaryParts,
-        personalVerdicts,
+        summary,
+        personalVerdicts
     };
 }
 
