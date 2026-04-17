@@ -15,17 +15,31 @@ import adminRoutes from './routes/admin.js';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS — allow all localhost in dev, restrict to CLIENT_URL in production
+// CORS — allow localhost in dev + configured CLIENT_URL + Vercel deployment domain
+const ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://truefoodbite.vercel.app',
+    process.env.CLIENT_URL,
+].filter(Boolean);
+
 app.use(cors({
     origin: function (origin, callback) {
+        // Allow requests with no origin (same-domain Vercel, curl, Postman, mobile)
         if (!origin) return callback(null, true);
+        // Allow any localhost port for dev
         if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
             return callback(null, true);
         }
-        if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL) {
+        // Allow any vercel.app subdomain of this project
+        if (origin.includes('truefoodbite') && origin.includes('vercel.app')) {
             return callback(null, true);
         }
-        callback(new Error('Not allowed by CORS'));
+        // Allow explicitly configured CLIENT_URL
+        if (ALLOWED_ORIGINS.includes(origin)) {
+            return callback(null, true);
+        }
+        callback(new Error('Not allowed by CORS: ' + origin));
     },
     credentials: true
 }));

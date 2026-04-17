@@ -1,3 +1,3 @@
-import app from '../backend/server-simple.js';
+import app from '../server-simple.js';
 
 export default app;

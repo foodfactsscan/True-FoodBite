@@ -1,5 +1,12 @@
 // Backend API base URL
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+// On Vercel: frontend + backend share the same domain (truefoodbite.vercel.app)
+// so /api routes are handled by backend/api/index.js via vercel.json rewrites.
+// In local dev: falls back to localhost:5000.
+const API_URL = import.meta.env.VITE_API_URL
+    ? import.meta.env.VITE_API_URL
+    : (typeof window !== 'undefined' && window.location.hostname !== 'localhost')
+        ? '/api'  // Production: same-domain API (Vercel)
+        : 'http://localhost:5000/api'; // Local dev
 
 // Auth API Service - Connects to backend OTP system
 class AuthService {
