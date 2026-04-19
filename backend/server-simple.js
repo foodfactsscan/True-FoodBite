@@ -10,12 +10,10 @@ import aiRoutes from './routes/ai.js';
 import productRoutes from './routes/products.js';
 import adminRoutes from './routes/admin.js';
 
-
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// CORS — allow localhost in dev + configured CLIENT_URL + Vercel deployment domain
+// ─── CORS ─────────────────────────────────────────────────────────────────────
 const ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://localhost:3000',
@@ -25,13 +23,13 @@ const ALLOWED_ORIGINS = [
 
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (same-domain Vercel, curl, Postman, mobile)
+        // Allow requests with no origin (same-domain Vercel, curl, Postman)
         if (!origin) return callback(null, true);
         // Allow any localhost port for dev
         if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
             return callback(null, true);
         }
-        // Allow any vercel.app subdomain of this project
+        // Allow any truefoodbite vercel.app subdomain
         if (origin.includes('truefoodbite') && origin.includes('vercel.app')) {
             return callback(null, true);
         }
@@ -47,45 +45,90 @@ app.use(cors({
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// API Routes
+// ─── Vercel Serverless: ensure DB is connected before every request ───────────
+// On Vercel, each serverless function invocation is stateless. The DB connection
+// must be established (or reused from a warm container) on EVERY request.
+// This middleware makes that bullet-proof.
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (err) {
+        console.error('DB connection failed on request:', err.message);
+        // Always return valid JSON — never an empty body
+        return res.status(503).json({
+            message: 'Database is temporarily unavailable. Please try again in a moment.',
+            error: 'SERVICE_UNAVAILABLE'
+        });
+    }
+});
+
+// ─── API Routes ───────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/admin', adminRoutes);
 
-// Health check
+// ─── Health check ─────────────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
     res.json({
         status: 'OK',
         message: 'True FoodBite API is running',
         database: 'MongoDB Atlas',
-        smtp: process.env.SMTP_USER ? 'configured' : 'not configured (dev mode)'
+        smtp: process.env.SMTP_USER ? 'configured' : 'not configured (dev mode)',
+        timestamp: new Date().toISOString(),
     });
 });
 
-// Global error handler
-app.use((err, req, res, next) => {
-    console.error('Unhandled error:', err);
-    res.status(err.status || 500).json({ message: err.message || 'Internal server error' });
+// ─── 404 handler ─────────────────────────────────────────────────────────────
+// Any unmatched route MUST return valid JSON, never an empty body.
+app.use((req, res) => {
+    res.status(404).json({ message: `Route not found: ${req.method} ${req.path}` });
 });
 
-// Connect to MongoDB then start server
-const start = async () => {
-    await connectDB();
+// ─── Global error handler ─────────────────────────────────────────────────────
+// Catches any uncaught errors in route handlers and always returns valid JSON.
+// This is the final safety net that prevents empty-body responses.
+app.use((err, req, res, next) => {
+    console.error('Unhandled error:', err.message || err);
 
-    if (process.env.NODE_ENV !== 'production' || !process.env.VERCEL) {
-        app.listen(PORT, () => {
-            console.log(`\n✅ Server running on http://localhost:${PORT}`);
-            console.log(`📱 Frontend URL: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
-            if (!process.env.SMTP_USER) {
-                console.log(`\n🔧 DEV MODE: OTP codes returned in API responses (no email needed)`);
-                console.log(`   To enable real emails, configure SMTP_USER and SMTP_PASS in backend/.env\n`);
-            }
-        });
+    // CORS errors
+    if (err.message && err.message.startsWith('Not allowed by CORS')) {
+        return res.status(403).json({ message: 'CORS: Origin not allowed.' });
     }
-};
 
-start();
+    // JSON parse errors (malformed request body)
+    if (err.type === 'entity.parse.failed') {
+        return res.status(400).json({ message: 'Invalid JSON in request body.' });
+    }
+
+    res.status(err.status || 500).json({
+        message: err.message || 'Internal server error. Please try again.',
+        error: process.env.NODE_ENV === 'development' ? err.stack : undefined,
+    });
+});
+
+// ─── Local dev server start ───────────────────────────────────────────────────
+// On Vercel, the app is exported directly without calling .listen()
+const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true';
+
+if (!isVercel) {
+    // Connect once at startup for local dev, then start listening
+    connectDB()
+        .then(() => {
+            app.listen(PORT, () => {
+                console.log(`\n✅ Server running on http://localhost:${PORT}`);
+                console.log(`📱 Frontend: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+                if (!process.env.SMTP_USER) {
+                    console.log(`\n🔧 DEV MODE: OTP codes returned in API responses (no email needed)`);
+                }
+            });
+        })
+        .catch((err) => {
+            console.error('Failed to start server:', err.message);
+            process.exit(1);
+        });
+}
 
 export default app;
