@@ -83,7 +83,7 @@ const Navbar = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 {/* True FoodBite Premium Animated Aura Logo */}
                 <Link to="/" style={{
-                    display: 'flex', alignItems: 'center', gap: '0.85rem', 
+                    display: 'flex', alignItems: 'center', gap: '0.85rem',
                     textDecoration: 'none', position: 'relative'
                 }}>
                     <style>{`
@@ -96,10 +96,10 @@ const Navbar = () => {
                             50% { transform: scale(1.1) translateZ(0); opacity: 0.8; }
                         }
                     `}</style>
-                    
+
                     {/* Living Ambient Lens */}
                     <div style={{ position: 'relative', width: '38px', height: '38px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                        
+
                         {/* 1. Deep Core Ambient Glow (The 'Breathe' effect) */}
                         <div style={{
                             position: 'absolute', inset: '-4px', borderRadius: '50%',
@@ -111,7 +111,7 @@ const Navbar = () => {
                         }} />
 
                         {/* 2. Slow, Elegant Sweeping Energy Ring */}
-                        <div style={{ 
+                        <div style={{
                             position: 'absolute', inset: 0, borderRadius: '50%',
                             background: 'conic-gradient(from 0deg, #0ea5e9, #10b981, #84cc16, #0ea5e9)',
                             animation: 'premiumSweep 12s linear infinite',
@@ -128,9 +128,9 @@ const Navbar = () => {
                             zIndex: 2,
                             boxShadow: 'inset 0 0 10px rgba(0,0,0,0.8)'
                         }}>
-                             <Scan size={18} color="#84cc16" strokeWidth={2.5} />
-                             {/* Central AI glowing reticle dot */}
-                             <div style={{ position: 'absolute', width: '4px', height: '4px', borderRadius: '50%', background: '#ffffff', boxShadow: '0 0 10px 2px rgba(14, 165, 233, 0.6)' }} />
+                            <Scan size={18} color="#84cc16" strokeWidth={2.5} />
+                            {/* Central AI glowing reticle dot */}
+                            <div style={{ position: 'absolute', width: '4px', height: '4px', borderRadius: '50%', background: '#ffffff', boxShadow: '0 0 10px 2px rgba(14, 165, 233, 0.6)' }} />
                         </div>
                     </div>
 
@@ -142,13 +142,13 @@ const Navbar = () => {
                                 100% { background-position: -200% 50%; }
                             }
                         `}</style>
-                        <span style={{ 
-                            fontSize: '1.45rem', fontWeight: '800', color: '#ffffff', 
-                            letterSpacing: '-0.02em', lineHeight: 1 
+                        <span style={{
+                            fontSize: '1.45rem', fontWeight: '800', color: '#ffffff',
+                            letterSpacing: '-0.02em', lineHeight: 1
                         }}>
                             True
                         </span>
-                        <span style={{ 
+                        <span style={{
                             fontSize: '1.45rem', fontWeight: '900', letterSpacing: '-0.02em', lineHeight: 1,
                             background: 'linear-gradient(90deg, #a3e635 0%, #10b981 25%, #38bdf8 50%, #10b981 75%, #a3e635 100%)',
                             backgroundSize: '200% auto',
@@ -211,7 +211,53 @@ const Navbar = () => {
                                 <User size={14} />
                                 <span>{user?.firstName}</span>
                             </button>
-                            {/* User menu code... preserved from original */}
+                            
+                            {/* User Menu Dropdown */}
+                            {showUserMenu && (
+                                <div style={{
+                                    position: 'absolute', top: 'calc(100% + 15px)', right: 0,
+                                    background: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(255,255,255,0.1)',
+                                    borderRadius: '16px', padding: '0.75rem', width: '220px',
+                                    backdropFilter: 'blur(20px)',
+                                    boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+                                    display: 'flex', flexDirection: 'column', gap: '0.4rem',
+                                    zIndex: 1000
+                                }}>
+                                    <div style={{ padding: '0.5rem 0.5rem 0.75rem', borderBottom: '1px solid rgba(255,255,255,0.1)', marginBottom: '0.25rem' }}>
+                                        <p style={{ fontSize: '0.9rem', fontWeight: '800', color: '#fff', margin: 0 }}>{user?.firstName} {user?.lastName}</p>
+                                        <p style={{ fontSize: '0.75rem', color: '#94a3b8', margin: '4px 0 0' }}>{user?.email}</p>
+                                    </div>
+
+                                    <Link to="/profile" onClick={() => setShowUserMenu(false)} style={{
+                                        display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.85rem',
+                                        color: '#e2e8f0', textDecoration: 'none', fontSize: '0.875rem', fontWeight: '600',
+                                        borderRadius: '10px', transition: 'background 0.2s'
+                                    }}
+                                        onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+                                        onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                        <User size={16} /> My Profile
+                                    </Link>
+                                    <Link to="/dashboard" onClick={() => setShowUserMenu(false)} style={{
+                                        display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.85rem',
+                                        color: '#e2e8f0', textDecoration: 'none', fontSize: '0.875rem', fontWeight: '600',
+                                        borderRadius: '10px', transition: 'background 0.2s'
+                                    }}
+                                        onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.08)'}
+                                        onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                        <Layout size={16} /> Dashboard
+                                    </Link>
+                                    <button onClick={handleLogout} style={{
+                                        width: '100%', display: 'flex', alignItems: 'center', gap: '0.75rem',
+                                        padding: '0.75rem', background: 'transparent', border: 'none',
+                                        color: '#f87171', cursor: 'pointer', borderRadius: '8px',
+                                        fontSize: '0.85rem', fontWeight: '700'
+                                    }}
+                                        onMouseEnter={e => e.currentTarget.style.backgroundColor = 'rgba(248,113,113,0.1)'}
+                                        onMouseLeave={e => e.currentTarget.style.backgroundColor = 'transparent'}>
+                                        <LogOut size={15} /> Logout
+                                    </button>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <Link to="/login" style={{
