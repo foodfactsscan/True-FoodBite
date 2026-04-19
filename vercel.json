@@ -4,7 +4,7 @@
   "outputDirectory": "frontend/dist",
   "framework": "vite",
   "functions": {
-    "backend/api/index.js": {
+    "api/index.js": {
       "maxDuration": 30
     }
   },
@@ -20,7 +20,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "backend/api/index.js"
+      "destination": "api/index.js"
     },
     {
       "source": "/(.*)",
