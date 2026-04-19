@@ -3,7 +3,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { MessageCircle, X, Send, Bot, User, Sparkles, Loader2, RefreshCw, Info, ShieldCheck } from 'lucide-react';
 import { useLocation } from 'react-router-dom';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL ||
+    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+        ? '/api'
+        : 'http://localhost:5000/api');
 
 // ─── 100% Scientifically Accurate Rule-Based Engine ──────────────────────────
 // Built strictly on FSSAI, ICMR-NIN, and WHO guidelines for offline reliability.

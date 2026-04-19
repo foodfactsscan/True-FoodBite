@@ -108,7 +108,7 @@ class OTPService {
 
     // Check if email exists in users database
     emailExists(email) {
-        const users = JSON.parse(localStorage.getItem('factsscan_users') || '[]');
+        const users = JSON.parse(localStorage.getItem('truefoodbite_users') || '[]');
         return users.some(u => u.email === email);
     }
 }

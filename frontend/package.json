@@ -14,7 +14,7 @@
     "@react-three/fiber": "9.0.0",
     "@zxing/library": "^0.21.3",
     "axios": "^1.13.4",
-    "framer-motion": "12.4.2",
+    "framer-motion": "^11.18.2",
     "gsap": "3.12.5",
     "html5-qrcode": "^2.3.8",
     "lucide-react": "0.475.0",

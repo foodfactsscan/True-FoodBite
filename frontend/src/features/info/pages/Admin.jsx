@@ -7,7 +7,10 @@ import {
     Clock, TrendingUp, UserCheck, UserX, ChevronDown, RefreshCw
 } from 'lucide-react';
 
-const API = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+const API = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL ||
+    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+        ? ''
+        : 'http://localhost:5000');
 const API_URL = `${API}/api/admin`;
 
 // ─── Styles ────────────────────────────────────────────────────────────────────

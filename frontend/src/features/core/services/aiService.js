@@ -1,9 +1,12 @@
 // AI Analysis Service — calls backend Gemini endpoint for custom health entries
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL ||
+    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+        ? '/api'
+        : 'http://localhost:5000/api');
 
 class AIService {
     getAuthHeader() {
-        const token = localStorage.getItem('factsscan_token');
+        const token = localStorage.getItem('truefoodbite_token');
         return token ? { 'Authorization': `Bearer ${token}` } : {};
     }
 

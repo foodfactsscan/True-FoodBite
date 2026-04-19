@@ -313,7 +313,10 @@ export const getProductByBarcode = async (barcode) => {
 
     console.log('🔄 Step 4: AI Fallback Search...');
     try {
-        const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:5000';
+        const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL ||
+            (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+                ? ''
+                : 'http://localhost:5000');
         const response = await fetchWithTimeout(`${BACKEND_URL}/api/products/${barcode}`, 8000);
 
         if (response && response.ok) {

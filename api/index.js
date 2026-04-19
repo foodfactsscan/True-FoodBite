@@ -122,7 +122,7 @@ const ProfileSchema = new mongoose.Schema({
 const Profile = mongoose.models.Profile || mongoose.model('Profile', ProfileSchema);
 
 // ─── JWT Helpers ──────────────────────────────────────────────────────────────
-const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-secure-jwt-secret-2026';
 
 function generateToken(user) {
     return jwt.sign(

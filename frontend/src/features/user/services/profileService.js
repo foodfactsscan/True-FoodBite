@@ -1,9 +1,12 @@
 // Profile API Service
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+const API_URL = import.meta.env.VITE_API_URL ||
+    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+        ? '/api'
+        : 'http://localhost:5000/api');
 
 class ProfileService {
     getAuthHeader() {
-        const token = localStorage.getItem('factsscan_token');
+        const token = localStorage.getItem('truefoodbite_token');
         return token ? { 'Authorization': `Bearer ${token}` } : {};
     }
 
@@ -55,10 +58,10 @@ class ProfileService {
             if (data.profile) {
                 localStorage.setItem('factsscan_profile', JSON.stringify(data.profile));
                 // Also update user display name in auth storage
-                const user = JSON.parse(localStorage.getItem('factsscan_user') || '{}');
+                const user = JSON.parse(localStorage.getItem('truefoodbite_user') || '{}');
                 if (profileData.firstName) user.firstName = profileData.firstName;
                 if (profileData.lastName) user.lastName = profileData.lastName;
-                localStorage.setItem('factsscan_user', JSON.stringify(user));
+                localStorage.setItem('truefoodbite_user', JSON.stringify(user));
             }
             return { success: true, profile: data.profile };
         } catch (error) {

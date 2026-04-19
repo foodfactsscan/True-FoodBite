@@ -99,8 +99,8 @@ class AuthService {
 
             // For signup, persist token and user
             if (type === 'signup' && data.token) {
-                localStorage.setItem('factsscan_token', data.token);
-                localStorage.setItem('factsscan_user', JSON.stringify(data.user));
+                localStorage.setItem('truefoodbite_token', data.token);
+                localStorage.setItem('truefoodbite_user', JSON.stringify(data.user));
             }
 
             return { success: true, ...data };
@@ -147,10 +147,10 @@ class AuthService {
 
             // Persist token and user
             if (data.token) {
-                localStorage.setItem('factsscan_token', data.token);
+                localStorage.setItem('truefoodbite_token', data.token);
             }
             if (data.user) {
-                localStorage.setItem('factsscan_user', JSON.stringify(data.user));
+                localStorage.setItem('truefoodbite_user', JSON.stringify(data.user));
             }
 
             return { success: true, ...data };
@@ -203,33 +203,33 @@ class AuthService {
 
     // ── Logout ────────────────────────────────────────────────────────────────
     logout() {
-        localStorage.removeItem('factsscan_token');
-        localStorage.removeItem('factsscan_user');
+        localStorage.removeItem('truefoodbite_token');
+        localStorage.removeItem('truefoodbite_user');
         return { success: true, message: 'Logged out successfully' };
     }
 
     // ── Get current user from localStorage ────────────────────────────────────
     getCurrentUser() {
         try {
-            const userStr = localStorage.getItem('factsscan_user');
+            const userStr = localStorage.getItem('truefoodbite_user');
             return userStr ? JSON.parse(userStr) : null;
         } catch {
             // Corrupted localStorage entry – clear it
-            localStorage.removeItem('factsscan_user');
+            localStorage.removeItem('truefoodbite_user');
             return null;
         }
     }
 
     // ── Check authentication status ────────────────────────────────────────────
     isAuthenticated() {
-        const token = localStorage.getItem('factsscan_token');
+        const token = localStorage.getItem('truefoodbite_token');
         const user = this.getCurrentUser();
         return !!token && !!user;
     }
 
     // ── Get auth token ────────────────────────────────────────────────────────
     getToken() {
-        return localStorage.getItem('factsscan_token');
+        return localStorage.getItem('truefoodbite_token');
     }
 }
 

@@ -8,7 +8,7 @@ const router = express.Router();
 // OTPs stay in-memory (temporary, 5-min expiry — no DB needed)
 const otps = new Map();
 
-const JWT_SECRET = process.env.JWT_SECRET || 'factsscan-dev-secret-change-in-production';
+const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-secure-jwt-secret-2026';
 const JWT_EXPIRES_IN = '30d';
 
 const isDevMode = () => !isSmtpConfigured();

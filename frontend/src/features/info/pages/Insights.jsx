@@ -151,9 +151,10 @@ export default function Insights() {
         const fetchNews = async () => {
             try {
                 // Production: relative /api | Local: http://localhost:5000/api
-                const API_BASE = (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1'))
-                    ? '/api'
-                    : 'http://localhost:5000/api';
+                const API_BASE = import.meta.env.VITE_API_URL ||
+                    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
+                        ? '/api'
+                        : 'http://localhost:5000/api');
                 
                 const response = await fetch(`${API_BASE}/news`);
                 if (response.ok) {

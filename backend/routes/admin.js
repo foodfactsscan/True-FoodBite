@@ -9,7 +9,7 @@ import AdminLog from '../models/AdminLog.js';
 const router = express.Router();
 
 // ─── Admin credentials (hardcoded for simplicity) ─────────────────────────────
-const ADMIN_EMAIL = 'admin@factsscan.com';
+const ADMIN_EMAIL = 'admin@truefoodbite.com';
 const ADMIN_PASSWORD = 'admin123';
 
 // ─── Admin authentication middleware ──────────────────────────────────────────

@@ -54,9 +54,9 @@ export const AuthProvider = ({ children }) => {
     // Set user after successful OTP verification during signup
     const setAuthUser = (userData, token) => {
         if (token) {
-            localStorage.setItem('factsscan_token', token);
+            localStorage.setItem('truefoodbite_token', token);
         }
-        localStorage.setItem('factsscan_user', JSON.stringify(userData));
+        localStorage.setItem('truefoodbite_user', JSON.stringify(userData));
         setUser(userData);
         setIsAuthenticated(true);
     };
