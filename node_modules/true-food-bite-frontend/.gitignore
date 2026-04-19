@@ -1,0 +1,6 @@
+# Dependencies (reinstall with: npm install)
+node_modules/
+backend/node_modules/
+
+# Logs
+*.log
