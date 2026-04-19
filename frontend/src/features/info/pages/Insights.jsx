@@ -3,7 +3,7 @@
  * Genuine research-backed food insights for Indian consumers.
  * All statistics cited from peer-reviewed sources.
  */
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { TrendingUp, AlertTriangle, BookOpen, Leaf, Heart, Zap, ChevronDown, ExternalLink, Scan } from 'lucide-react';
@@ -150,8 +150,12 @@ export default function Insights() {
     useEffect(() => {
         const fetchNews = async () => {
             try {
-                const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
-                const response = await fetch(`${BACKEND_URL}/api/news`);
+                // Production: relative /api | Local: http://localhost:5000/api
+                const API_BASE = (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1'))
+                    ? '/api'
+                    : 'http://localhost:5000/api';
+                
+                const response = await fetch(`${API_BASE}/news`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.success && data.news?.length > 0) {

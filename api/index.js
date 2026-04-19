@@ -203,54 +203,76 @@ async function fetchLiveNews() {
     }
 
     try {
-        // Query focused on Indian food safety, FSSAI alerts, and export/import news
-        const query = encodeURIComponent('food safety India OR FSSAI alerts OR Indian food export news OR food adulteration India');
-        const url = `https://news.google.com/rss/search?q=${query}&hl=en-IN&gl=IN&ceid=IN:en`;
+        console.log('📰 Fetching live food safety news...');
+        // Query focused on Indian food safety and alerts
+        const queries = [
+            'food safety India news',
+            'FSSAI notifications 2024',
+            'Indian food alert report',
+            'food adulteration caught in India'
+        ];
+        const randomQuery = queries[Math.floor(Math.random() * queries.length)];
+        const url = `https://news.google.com/rss/search?q=${encodeURIComponent(randomQuery)}&hl=en-IN&gl=IN&ceid=IN:en`;
 
-        const response = await fetch(url);
-        if (!response.ok) throw new Error('News fetch failed');
-
+        const response = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
+        });
+        
+        if (!response.ok) throw new Error(`News fetch failed: ${response.status}`);
         const xml = await response.text();
-
-        // Simple regex-based RSS parser (lightweight for serverless)
+        
         const items = [];
-        const itemMatches = xml.matchAll(/<item>([\s\S]*?)<\/item>/g);
+        // More robust item split that handles line breaks and nested tags better
+        const itemBlocks = xml.split('<item>').slice(1);
 
-        for (const match of itemMatches) {
-            const content = match[1];
-            const title = content.match(/<title>([\s\S]*?)<\/title>/)?.[1] || '';
-            const link = content.match(/<link>([\s\S]*?)<\/link>/)?.[1] || '';
-            const pubDate = content.match(/<pubDate>([\s\S]*?)<\/pubDate>/)?.[1] || '';
-            const source = content.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] || '';
+        for (const block of itemBlocks) {
+            const cleanBlock = block.split('</item>')[0];
+            
+            // Helper to extract content from tags (including CDATA)
+            const getTag = (tag) => {
+                const match = cleanBlock.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
+                if (!match) return '';
+                let val = match[1];
+                if (val.includes('<![CDATA[')) {
+                    val = val.replace(/<!\[CDATA\[/g, '').replace(/\]\]>/g, '');
+                }
+                return val.trim();
+            };
+
+            const title = getTag('title');
+            const link = getTag('link');
+            const source = cleanBlock.match(/<source[^>]*>([\s\S]*?)<\/source>/)?.[1] || 'Industry Update';
+            const pubDate = getTag('pubDate');
 
             if (title && link) {
-                // Clean up title (remove source suffix often added by Google News)
                 let cleanTitle = title.split(' - ')[0].trim();
-                // Decode common HTML entities
                 cleanTitle = cleanTitle
-                    .replace(/&amp;/g, '&')
-                    .replace(/&quot;/g, '"')
-                    .replace(/&apos;/g, "'")
-                    .replace(/&lt;/g, '<')
-                    .replace(/&gt;/g, '>')
-                    .replace(/&#39;/g, "'");
+                    .replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'")
+                    .replace(/[\n\r]+/g, ' ');
 
                 items.push({
                     title: cleanTitle,
                     link,
-                    source: source || 'News Update',
+                    source,
                     date: pubDate,
                     id: crypto.createHash('md5').update(link).digest('hex')
                 });
             }
-            if (items.length >= 10) break;
+            if (items.length >= 12) break;
+        }
+
+        console.log(`✅ Successfully fetched ${items.length} news items.`);
+        
+        if (items.length === 0) {
+            console.warn('⚠️ No news items parsed from feed.');
         }
 
         newsCache = { data: items, timestamp: Date.now() };
         return items;
     } catch (err) {
-        console.error('Fetch news error:', err.message);
-        return newsCache.data; // Return stale cache on error
+        console.error('❌ News service error:', err.message);
+        return newsCache.data;
     }
 }
 
