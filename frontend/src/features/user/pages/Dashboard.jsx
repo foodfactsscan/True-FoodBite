@@ -11,6 +11,7 @@ import trackingService from '../services/historyService';
 import profileService from '../services/profileService';
 import { calculateDailyRecommendations } from '../../product/services/personalizedEngine';
 import { useAuth } from '../../auth/context/AuthContext';
+import { SYNC_KEYS, useSyncEffect } from '../../core/services/trueSync';
 
 const Dashboard = () => {
     const navigate = useNavigate();
@@ -44,6 +45,11 @@ const Dashboard = () => {
         setProfile(profileService.getCachedProfile());
         setIntakeData(trackingService.getDailySummary(selectedDate));
     };
+
+    // Seamless Live Sync listeners
+    useSyncEffect(SYNC_KEYS.SCAN_HISTORY, loadData);
+    useSyncEffect(SYNC_KEYS.DAILY_INTAKE, loadData);
+    useSyncEffect(SYNC_KEYS.USER_PROFILE, loadData);
 
     const handleDeleteIntake = (timestamp) => {
         const list = trackingService._get('factsscan_intake_cache');

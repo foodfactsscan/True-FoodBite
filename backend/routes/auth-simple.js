@@ -1,12 +1,10 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
+import OTP from '../models/Otp.js';
 import { sendOTPEmail, generateOTP, isSmtpConfigured } from '../services/emailService.js';
 
 const router = express.Router();
-
-// OTPs stay in-memory (temporary, 5-min expiry — no DB needed)
-const otps = new Map();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-secure-jwt-secret-2026';
 const JWT_EXPIRES_IN = '30d';
@@ -76,14 +74,13 @@ router.post('/signup', async (req, res) => {
             await User.create({ firstName, lastName, email: emailLower, password });
         }
 
-        // Generate OTP
+        // Generate and Save OTP to DB (Persistent)
         const otp = generateOTP();
-        otps.set(emailLower, {
-            otp,
-            type: 'signup',
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            attempts: 0
-        });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type: 'signup' },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
 
         await sendOTPEmail(emailLower, otp, 'signup');
 
@@ -111,25 +108,29 @@ router.post('/verify-otp', async (req, res) => {
     try {
         const { email, otp, type } = req.body;
         const emailLower = email.toLowerCase().trim();
-        const otpData = otps.get(emailLower);
+        
+        // Find OTP in DB
+        const otpData = await OTP.findOne({ email: emailLower, type });
 
-        if (!otpData || otpData.type !== type) {
-            return res.status(400).json({ message: 'No OTP found. Please request a new one.' });
+        if (!otpData) {
+            return res.status(400).json({ message: 'No OTP found or expired. Please request a new one.' });
         }
-        if (Date.now() > otpData.expiresAt) {
-            otps.delete(emailLower);
+        if (Date.now() > otpData.expiresAt.getTime()) {
+            await OTP.deleteOne({ _id: otpData._id });
             return res.status(400).json({ message: 'OTP has expired. Please request a new one.' });
         }
         if (otpData.otp !== otp.trim()) {
             otpData.attempts++;
             if (otpData.attempts >= 5) {
-                otps.delete(emailLower);
+                await OTP.deleteOne({ _id: otpData._id });
                 return res.status(400).json({ message: 'Too many attempts. Request a new OTP.' });
             }
+            await otpData.save();
             return res.status(400).json({ message: `Invalid OTP. ${5 - otpData.attempts} attempts remaining.` });
         }
 
-        otps.delete(emailLower);
+        // Valid OTP!
+        await OTP.deleteOne({ _id: otpData._id });
 
         if (type === 'signup') {
             const user = await User.findOne({ email: emailLower });
@@ -174,11 +175,11 @@ router.post('/resend-otp', async (req, res) => {
         }
 
         const otp = generateOTP();
-        otps.set(emailLower, {
-            otp, type,
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            attempts: 0
-        });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
 
         await sendOTPEmail(emailLower, otp, type);
 
@@ -259,12 +260,11 @@ router.post('/forgot-password', async (req, res) => {
         }
 
         const otp = generateOTP();
-        otps.set(emailLower, {
-            otp,
-            type: 'forgot-password',
-            expiresAt: Date.now() + 5 * 60 * 1000,
-            attempts: 0
-        });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type: 'forgot-password' },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
 
         await sendOTPEmail(emailLower, otp, 'forgot-password');
 
@@ -296,7 +296,9 @@ router.post('/reset-password', async (req, res) => {
 
         user.password = password; // re-hashed by pre-save hook
         await user.save();
-        otps.delete(emailLower);
+        
+        // Final cleanup
+        await OTP.deleteMany({ email: emailLower, type: 'forgot-password' });
 
         res.json({ success: true, message: 'Password reset successfully. Please login with your new password.' });
     } catch (error) {

@@ -1,4 +1,5 @@
 import authService from '../../auth/services/authService';
+import { SYNC_KEYS, invalidateSync } from '../../core/services/trueSync';
 
 const API_URL = import.meta.env.VITE_API_URL ||
     (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
@@ -65,6 +66,7 @@ class TrackingService {
         const filtered = list.filter(i => i.barcode !== item.barcode);
         const updated = [item, ...filtered].slice(0, 100);
         this._set(KEYS.HISTORY, updated);
+        invalidateSync(SYNC_KEYS.SCAN_HISTORY);
 
         if (authService.isAuthenticated() && navigator.onLine) {
             try {
@@ -105,6 +107,7 @@ class TrackingService {
         }
 
         this._set(KEYS.FAVORITES, list);
+        invalidateSync(SYNC_KEYS.SCAN_HISTORY); // Favorites are often shown in history/search
 
         // Sync with server if authenticated
         if (authService.isAuthenticated() && navigator.onLine) {
@@ -145,6 +148,7 @@ class TrackingService {
             };
         }
         this._set(KEYS.NOTES, notes);
+        invalidateSync(SYNC_KEYS.USER_PROFILE); // Trigger note sync
 
         if (authService.isAuthenticated() && navigator.onLine) {
             try {
@@ -196,6 +200,7 @@ class TrackingService {
         const intake = this._get(KEYS.INTAKE);
         const updated = [entry, ...intake];
         this._set(KEYS.INTAKE, updated);
+        invalidateSync(SYNC_KEYS.DAILY_INTAKE);
 
         if (authService.isAuthenticated() && navigator.onLine) {
             try {

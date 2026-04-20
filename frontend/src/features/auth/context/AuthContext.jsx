@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import authService from '../services/authService';
+import { SYNC_KEYS, useSyncEffect } from '../../core/services/trueSync';
 
 const AuthContext = createContext();
 
@@ -15,6 +16,14 @@ export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [loading, setLoading] = useState(true);
+
+    const syncUser = () => {
+        const currentUser = authService.getCurrentUser();
+        if (currentUser) setUser(currentUser);
+    };
+
+    // Listen for global profile changes (e.g. from Profile page or Admin)
+    useSyncEffect(SYNC_KEYS.USER_PROFILE, syncUser);
 
     // Check if user is logged in on mount
     useEffect(() => {

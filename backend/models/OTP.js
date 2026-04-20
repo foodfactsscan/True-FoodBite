@@ -1,13 +1,11 @@
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 
-const otpSchema = new mongoose.Schema({
+const OTPSchema = new mongoose.Schema({
     email: {
         type: String,
         required: true,
         lowercase: true,
-        trim: true,
-        index: true
+        trim: true
     },
     otp: {
         type: String,
@@ -15,51 +13,22 @@ const otpSchema = new mongoose.Schema({
     },
     type: {
         type: String,
-        enum: ['signup', 'forgot-password'],
-        required: true
+        required: true,
+        enum: ['signup', 'forgot-password']
     },
     expiresAt: {
         type: Date,
-        required: true,
-        index: { expires: 0 } // TTL index - MongoDB will auto-delete after expiry
+        required: true
     },
     attempts: {
         type: Number,
-        default: 0,
-        max: 5 // Max 5 verification attempts
-    },
-    verified: {
-        type: Boolean,
-        default: false
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
+        default: 0
     }
+}, {
+    timestamps: true
 });
 
-// Hash OTP before saving
-otpSchema.pre('save', async function (next) {
-    if (!this.isModified('otp')) return next();
+// TTL Index: Auto-delete documents when current time > expiresAt
+OTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-    try {
-        const salt = await bcrypt.genSalt(10);
-        this.otp = await bcrypt.hash(this.otp, salt);
-        next();
-    } catch (error) {
-        next(error);
-    }
-});
-
-// Compare OTP method
-otpSchema.methods.compareOTP = async function (candidateOTP) {
-    return await bcrypt.compare(candidateOTP, this.otp);
-};
-
-// Increment attempt counter
-otpSchema.methods.incrementAttempts = async function () {
-    this.attempts += 1;
-    await this.save();
-};
-
-export default mongoose.model('OTP', otpSchema);
+export default mongoose.models.OTP || mongoose.model('OTP', OTPSchema);

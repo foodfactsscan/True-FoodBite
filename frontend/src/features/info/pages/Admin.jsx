@@ -6,6 +6,7 @@ import {
     LogOut, Settings, Bell, Flag, FlaskConical, Plus, Save,
     Clock, TrendingUp, UserCheck, UserX, ChevronDown, RefreshCw
 } from 'lucide-react';
+import { SYNC_KEYS, invalidateSync, useSyncEffect, usePolling, optimisticMutate } from '../../core/services/trueSync';
 
 const API = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL ||
     (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1')
@@ -115,7 +116,12 @@ function Modal({ show, onClose, title, children }) {
 // DASHBOARD TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function DashboardTab({ stats, loading }) {
-    if (loading) return <p style={{ color: '#94a3b8' }}>Loading analytics...</p>;
+    useSyncEffect(SYNC_KEYS.ADMIN_STATS, () => {
+        // Parent handles the actual re-fetch of stats state
+        console.log('[Admin] Stats refresh triggered via TrueSync');
+    });
+
+    if (loading && !stats) return <p style={{ color: '#94a3b8' }}>Loading analytics...</p>;
     if (!stats) return <p style={{ color: '#94a3b8' }}>Unable to load stats. Is the backend running?</p>;
 
     const cards = [
@@ -250,6 +256,9 @@ function UsersTab() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+    
+    // Listen for global user list invalidations
+    useSyncEffect(SYNC_KEYS.USER_LIST, load);
 
     const filtered = users.filter(u =>
         `${u.firstName} ${u.lastName} ${u.email}`.toLowerCase().includes(search.toLowerCase())
@@ -259,15 +268,26 @@ function UsersTab() {
 
     const deleteUser = async (email) => {
         if (!confirm(`Delete user ${email}? This cannot be undone.`)) return;
-        const res = await api(`/users/${encodeURIComponent(email)}`, { method: 'DELETE' });
-        showMsg(res.message);
-        load();
+        
+        await optimisticMutate({
+            action: () => api(`/users/${encodeURIComponent(email)}`, { method: 'DELETE' }),
+            onSync: SYNC_KEYS.ADMIN_STATS, // Also refresh dashboard stats
+            localState: users,
+            setLocalState: setUsers,
+            tempUpdate: (list) => list.filter(u => u.email !== email),
+            onFail: (err) => alert(err)
+        });
     };
 
     const toggleVerify = async (email) => {
-        const res = await api(`/users/${encodeURIComponent(email)}/toggle-verify`, { method: 'PUT' });
-        showMsg(res.message);
-        load();
+        await optimisticMutate({
+            action: () => api(`/users/${encodeURIComponent(email)}/toggle-verify`, { method: 'PUT' }),
+            onSync: SYNC_KEYS.ADMIN_STATS,
+            localState: users,
+            setLocalState: setUsers,
+            tempUpdate: (list) => list.map(u => u.email === email ? { ...u, isVerified: !u.isVerified } : u),
+            onFail: (err) => alert(err)
+        });
     };
 
     const handlePwUpdate = (message) => { showMsg(message); load(); };
@@ -347,6 +367,8 @@ function IngredientsTab() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+
+    useSyncEffect(SYNC_KEYS.INGREDIENTS, load);
 
     const openAdd = () => { setForm({ name: '', code: '', category: 'preservative', riskLevel: 'safe', description: '', alternateNames: '' }); setModal('add'); };
     const openEdit = (item) => { setForm({ name: item.name, code: item.code, category: item.category, riskLevel: item.riskLevel, description: item.description, alternateNames: (item.alternateNames || []).join(', ') }); setModal(item); };
@@ -472,6 +494,8 @@ function FlaggedTab() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+    
+    useSyncEffect(SYNC_KEYS.FLAGGED, load);
 
     const openAdd = () => { setForm({ name: '', code: '', severity: 'moderate', reason: '', source: 'FSSAI', affectedProducts: '' }); setModal('add'); };
     const openEdit = (item) => { setForm({ name: item.name, code: item.code, severity: item.severity, reason: item.reason, source: item.source, affectedProducts: (item.affectedProducts || []).join(', ') }); setModal(item); };
@@ -600,6 +624,12 @@ export default function Admin() {
     }, []);
 
     useEffect(() => { if (loggedIn) loadStats(); }, [loggedIn, loadStats]);
+
+    // Background Poll Stats every 20 seconds (Live Admin View)
+    usePolling(SYNC_KEYS.ADMIN_STATS, 20000);
+    
+    // Listen for mutations that invalidates stats
+    useSyncEffect(SYNC_KEYS.ADMIN_STATS, loadStats);
 
     const handleLogout = () => {
         localStorage.removeItem('adminToken');

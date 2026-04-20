@@ -148,7 +148,20 @@ function authenticateToken(req, res, next) {
 }
 
 // ─── OTP Helpers ──────────────────────────────────────────────────────────────
-const otps = new Map(); // In-memory OTP store (per warm container)
+const isDevMode = () => !process.env.SMTP_USER || !process.env.SMTP_PASS;
+
+const OTPSchema = new mongoose.Schema({
+    email: { type: String, required: true, lowercase: true, trim: true },
+    otp: { type: String, required: true },
+    type: { type: String, required: true }, // 'signup' or 'forgot-password'
+    expiresAt: { type: Date, required: true },
+    attempts: { type: Number, default: 0 },
+}, { timestamps: true });
+
+// TTL Index to auto-delete expired OTPs
+OTPSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const OTP = mongoose.models.OTP || mongoose.model('OTP', OTPSchema);
 
 function generateOTP() {
     return crypto.randomInt(100000, 999999).toString();
@@ -320,10 +333,14 @@ app.post('/api/auth/signup', async (req, res) => {
             return res.status(400).json({ message: 'Password must be at least 6 characters' });
         }
         const emailLower = email.toLowerCase().trim();
+        
+        // 1. Check if verified user exists
         const existing = await User.findOne({ email: emailLower });
         if (existing && existing.isVerified) {
             return res.status(400).json({ message: 'Email already registered. Please login.' });
         }
+        
+        // 2. Create or update unverified user
         if (existing) {
             existing.firstName = firstName;
             existing.lastName  = lastName;
@@ -332,11 +349,23 @@ app.post('/api/auth/signup', async (req, res) => {
         } else {
             await User.create({ firstName, lastName, email: emailLower, password });
         }
+
+        // 3. Generate and Save OTP to DB (Persistent across serverless instances)
         const otp = generateOTP();
-        otps.set(emailLower, { otp, type: 'signup', expiresAt: Date.now() + 5 * 60 * 1000, attempts: 0 });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type: 'signup' },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
+
+        // 4. Send Email
         await sendOTPEmail(emailLower, otp, 'signup');
+
         const response = { success: true, message: 'OTP sent to your email. Please verify to complete registration.', email: emailLower };
-        if (isDevMode()) { response.devOtp = otp; response.message = 'DEV MODE: Your OTP is shown below.'; }
+        if (isDevMode()) { 
+            response.devOtp = otp; 
+            response.message = 'DEV MODE: Your OTP is shown below. Enter it to verify.'; 
+        }
         return res.status(201).json(response);
     } catch (err) {
         console.error('Signup error:', err);
@@ -349,20 +378,32 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     try {
         const { email, otp, type } = req.body;
         const emailLower  = email.toLowerCase().trim();
-        const otpData     = otps.get(emailLower);
-        if (!otpData || otpData.type !== type) {
-            return res.status(400).json({ message: 'No OTP found. Please request a new one.' });
+        
+        // Find OTP in DB
+        const otpData = await OTP.findOne({ email: emailLower, type });
+        
+        if (!otpData) {
+            return res.status(400).json({ message: 'No OTP found or expired. Please request a new one.' });
         }
-        if (Date.now() > otpData.expiresAt) {
-            otps.delete(emailLower);
+        
+        if (Date.now() > otpData.expiresAt.getTime()) {
+            await OTP.deleteOne({ _id: otpData._id });
             return res.status(400).json({ message: 'OTP has expired. Please request a new one.' });
         }
+        
         if (otpData.otp !== otp.trim()) {
             otpData.attempts++;
-            if (otpData.attempts >= 5) { otps.delete(emailLower); return res.status(400).json({ message: 'Too many attempts. Request a new OTP.' }); }
+            if (otpData.attempts >= 5) { 
+                await OTP.deleteOne({ _id: otpData._id }); 
+                return res.status(400).json({ message: 'Too many attempts. Request a new OTP.' }); 
+            }
+            await otpData.save();
             return res.status(400).json({ message: `Invalid OTP. ${5 - otpData.attempts} attempts remaining.` });
         }
-        otps.delete(emailLower);
+        
+        // OTP is valid!
+        await OTP.deleteOne({ _id: otpData._id });
+
         if (type === 'signup') {
             const user = await User.findOne({ email: emailLower });
             if (!user) return res.status(404).json({ message: 'User not found' });
@@ -388,8 +429,14 @@ app.post('/api/auth/resend-otp', async (req, res) => {
             const exists = await User.findOne({ email: emailLower });
             if (!exists) return res.status(404).json({ message: 'No account found with this email' });
         }
+        
         const otp = generateOTP();
-        otps.set(emailLower, { otp, type, expiresAt: Date.now() + 5 * 60 * 1000, attempts: 0 });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
+
         await sendOTPEmail(emailLower, otp, type);
         const response = { success: true, message: 'New OTP sent to your email.' };
         if (isDevMode()) { response.devOtp = otp; response.message = 'DEV MODE: New OTP generated.'; }
@@ -432,8 +479,14 @@ app.post('/api/auth/forgot-password', async (req, res) => {
         if (!emailLower) return res.status(400).json({ message: 'Email is required' });
         const user = await User.findOne({ email: emailLower });
         if (!user) return res.status(404).json({ message: 'No account found with this email' });
+        
         const otp = generateOTP();
-        otps.set(emailLower, { otp, type: 'forgot-password', expiresAt: Date.now() + 5 * 60 * 1000, attempts: 0 });
+        await OTP.findOneAndUpdate(
+            { email: emailLower, type: 'forgot-password' },
+            { otp, expiresAt: new Date(Date.now() + 5 * 60 * 1000), attempts: 0 },
+            { upsert: true, new: true }
+        );
+
         await sendOTPEmail(emailLower, otp, 'forgot-password');
         const response = { success: true, message: 'Password reset OTP sent to your email.' };
         if (isDevMode()) { response.devOtp = otp; response.message = 'DEV MODE: Check OTP below.'; }
@@ -456,7 +509,10 @@ app.post('/api/auth/reset-password', async (req, res) => {
         if (!user) return res.status(404).json({ message: 'User not found' });
         user.password = password;
         await user.save();
-        otps.delete(emailLower);
+        
+        // Final cleanup
+        await OTP.deleteMany({ email: emailLower, type: 'forgot-password' });
+        
         return res.json({ success: true, message: 'Password reset successfully. Please login with your new password.' });
     } catch (err) {
         console.error('Reset password error:', err);
@@ -591,25 +647,89 @@ function getAIFallback(message) {
     return 'I specialise in food science, nutritional verification, and ingredient safety. Ask me about additives, health conditions, NOVA classification, or specific ingredients. How may I help you?';
 }
 
-// ─── Products proxy route ─────────────────────────────────────────────────────
+// ─── Products Route (OFF + AI Fallback) ───────────────────────────────────────
 app.get('/api/products/:barcode', async (req, res) => {
     try {
         const { barcode } = req.params;
         const apiKey = process.env.GEMINI_API_KEY;
-        if (!apiKey) return res.status(200).json({ status: 0, message: 'Product not found' });
-        const prompt = `You are a food product database for Indian packaged foods. Return ONLY valid JSON for barcode ${barcode}. If you know this product from training data, return: {"status":1,"product":{"product_name":"Name","brands":"Brand","quantity":"Xg","ingredients_text":"ingredients...","nutriments":{"energy_100g":0,"fat_100g":0,"saturated-fat_100g":0,"sugars_100g":0,"proteins_100g":0,"fiber_100g":0,"salt_100g":0,"sodium_100g":0,"carbohydrates_100g":0}}}. If unknown, return {"status":0}.`;
-        const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 512 } }),
-        });
-        if (!geminiRes.ok) return res.json({ status: 0 });
-        const data = await geminiRes.json();
-        let text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{"status":0}';
-        text = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
-        try { return res.json(JSON.parse(text)); } catch { return res.json({ status: 0 }); }
+
+        console.log(`🔍 Product Lookup: ${barcode}`);
+
+        // 1. First, try Open Food Facts (OFF) for 100% verifiable data
+        let productData = null;
+        try {
+            const offRes = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode}.json`, {
+                headers: { 'User-Agent': 'TrueFoodBite - Web - Version 1.0 (https://truefoodbite.vercel.app)' }
+            });
+            if (offRes.ok) {
+                const offJson = await offRes.json();
+                if (offJson.status === 1 && offJson.product) {
+                    console.log('✅ Found in Open Food Facts');
+                    const p = offJson.product;
+                    productData = {
+                        product_name: p.product_name || p.product_name_en || 'Unknown Product',
+                        brands: p.brands || 'Unknown Brand',
+                        quantity: p.quantity || '',
+                        ingredients_text: p.ingredients_text || '',
+                        image_url: p.image_url || p.image_front_url || '',
+                        image_front_url: p.image_front_url || p.image_url || '',
+                        nutriments: {
+                            energy_100g: p.nutriments?.['energy-kcal_100g'] || p.nutriments?.energy_100g || 0,
+                            fat_100g: p.nutriments?.fat_100g || 0,
+                            'saturated-fat_100g': p.nutriments?.['saturated-fat_100g'] || 0,
+                            sugars_100g: p.nutriments?.sugars_100g || 0,
+                            proteins_100g: p.nutriments?.proteins_100g || 0,
+                            fiber_100g: p.nutriments?.fiber_100g || 0,
+                            salt_100g: p.nutriments?.salt_100g || 0,
+                            sodium_100g: p.nutriments?.sodium_100g || 0,
+                            carbohydrates_100g: p.nutriments?.carbohydrates_100g || 0,
+                        },
+                        nova_group: p.nova_group || null,
+                        categories_tags: p.categories_tags || []
+                    };
+                }
+            }
+        } catch (offErr) {
+            console.error('OFF Fetch Error:', offErr.message);
+        }
+
+        // 2. If not in OFF or ingredients missing, use AI fallback/enhancement
+        if (!productData || !productData.ingredients_text || !productData.nutriments.energy_100g) {
+            if (!apiKey) return res.status(200).json({ status: 0, message: 'Product not found and AI disabled' });
+
+            console.log('🤖 Using AI for product research/refinement...');
+            const prompt = `You are a food product database for Indian/Global packaged foods. 
+            Research barcode ${barcode}. Return ONLY valid JSON.
+            If you know this product, return: {"status":1,"product":{"product_name":"Name","brands":"Brand","quantity":"Xg","ingredients_text":"ingredients...","nutriments":{"energy_100g":0,"fat_100g":0,"saturated-fat_100g":0,"sugars_100g":0,"proteins_100g":0,"fiber_100g":0,"salt_100g":0,"sodium_100g":0,"carbohydrates_100g":0}}}.
+            If totally unknown, return {"status":0}. 
+            Current context: ${productData ? JSON.stringify(productData) : 'None'}`;
+
+            const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 1024 } }),
+            });
+
+            if (geminiRes.ok) {
+                const aiData = await geminiRes.json();
+                let text = aiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{"status":0}';
+                text = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed.status === 1) {
+                        // Merge or override
+                        productData = { ...productData, ...parsed.product };
+                    }
+                } catch (pErr) { console.error('AI JSON Parse Error:', pErr); }
+            }
+        }
+
+        if (productData) {
+            return res.json({ status: 1, product: productData });
+        }
+        return res.json({ status: 0, message: 'Product information unavailable' });
     } catch (err) {
-        console.error('Products error:', err);
-        return res.json({ status: 0 });
+        console.error('Products Route Error:', err);
+        return res.json({ status: 0, error: 'Internal server error' });
     }
 });
 
