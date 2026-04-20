@@ -74,11 +74,11 @@ const Navbar = () => {
             padding: '0.5rem 1rem',
             zIndex: 1000,
             transition: 'all 0.4s cubic-bezier(0.23, 1, 0.32, 1)',
-            borderRadius: scrolled ? '24px' : '40px',
-            backdropFilter: 'blur(20px)',
-            background: scrolled ? 'rgba(10, 15, 30, 0.7)' : 'rgba(255, 255, 255, 0.03)',
-            border: '1px solid rgba(255,255,255,0.08)',
-            boxShadow: scrolled ? '0 20px 40px rgba(0,0,0,0.3)' : 'none'
+            borderRadius: scrolled ? '20px' : '32px',
+            backdropFilter: 'blur(16px) saturate(180%)',
+            background: scrolled ? 'rgba(3, 7, 18, 0.85)' : 'rgba(255, 255, 255, 0.02)',
+            border: scrolled ? '1px solid rgba(255,255,255,0.12)' : '1px solid rgba(255,255,255,0.06)',
+            boxShadow: scrolled ? '0 20px 40px rgba(0,0,0,0.4), 0 0 20px rgba(132, 204, 22, 0.05)' : 'none'
         }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 {/* True FoodBite Premium Animated Aura Logo */}
@@ -162,29 +162,39 @@ const Navbar = () => {
 
                 {/* Nav Links - Integrated Aesthetic */}
                 <div style={{
-                    display: 'flex', gap: '2rem', alignItems: 'center',
-                    background: 'rgba(255,255,255,0.03)', padding: '0.4rem 2rem',
+                    display: 'flex', gap: '2.5rem', alignItems: 'center',
+                    background: 'rgba(255,255,255,0.03)', padding: '0.5rem 2.5rem',
                     borderRadius: '50px', border: '1px solid rgba(255,255,255,0.05)'
                 }}>
-                    {['Home', 'Scanner', 'Compare', 'How It Works'].map((label) => (
+                    {[
+                        { label: 'Home', path: '/' },
+                        { label: 'Scanner', path: '/scan' },
+                        { label: 'Compare', path: '/compare' },
+                        { label: 'Dashboard', path: '/dashboard' }
+                    ].map((item) => (
                         <Link
-                            key={label}
-                            to={label === 'Home' ? '/' : label === 'Scanner' ? '/scan' : `/${label.toLowerCase().replace(/ /g, '-')}`}
+                            key={item.label}
+                            to={item.path}
                             style={{
-                                color: '#94a3b8', textDecoration: 'none', fontSize: '0.85rem',
+                                color: '#94a3b8', textDecoration: 'none', fontSize: '0.875rem',
                                 fontWeight: '700', transition: 'all 0.3s cubic-bezier(0.23, 1, 0.32, 1)',
-                                position: 'relative'
+                                position: 'relative', letterSpacing: '0.01em'
                             }}
                             onMouseEnter={e => {
                                 e.target.style.color = '#f1f5f9';
                                 e.target.style.transform = 'translateY(-1px)';
+                                // QuantumPulse Pre-fetching Logic (Triggers browser to load the page chunk before click)
+                                try { 
+                                    const feature = item.path === '/' ? 'Home' : item.label;
+                                    import(`../../${item.path.includes('scan') ? 'scanner' : item.path.includes('dashboard') ? 'user' : 'info'}/pages/${feature}.jsx`);
+                                } catch(e) {}
                             }}
                             onMouseLeave={e => {
                                 e.target.style.color = '#94a3b8';
                                 e.target.style.transform = 'translateY(0)';
                             }}
                         >
-                            {label}
+                            {item.label}
                         </Link>
                     ))}
                 </div>

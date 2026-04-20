@@ -1,35 +1,50 @@
 
 import { BrowserRouter as Router, Routes, Route, useLocation } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
-import { useEffect } from 'react';
+import { useEffect, Suspense, lazy } from 'react';
 
 import Navbar from './features/core/components/Navbar';
 import Footer from './features/core/components/Footer';
 import ErrorBoundary from './features/core/components/ErrorBoundary';
-import Home from './features/info/pages/Home';
-import Scanner from './features/scanner/pages/Scanner';
-import ProductDetails from './features/product/pages/ProductDetails';
-import HowItWorks from './features/info/pages/HowItWorks';
-import About from './features/info/pages/About';
-import Insights from './features/info/pages/Insights';
-import PrivacyPolicy from './features/info/pages/PrivacyPolicy';
-import TermsOfService from './features/info/pages/TermsOfService';
-import ApiDocumentation from './features/info/pages/ApiDocumentation';
-import Login from './features/auth/pages/Login';
-import Signup from './features/auth/pages/Signup';
-import Profile from './features/user/pages/Profile';
-import OTPVerification from './features/auth/pages/OTPVerification';
-import ForgotPassword from './features/auth/pages/ForgotPassword';
-import ResetPassword from './features/auth/pages/ResetPassword';
-import Compare from './features/product/pages/Compare';
-import Admin from './features/info/pages/Admin';
-import LabelScanner from './features/scanner/pages/LabelScanner';
-import Dashboard from './features/user/pages/Dashboard';
 import { AuthProvider } from './features/auth/context/AuthContext';
 import OfflineStatus from './features/core/components/OfflineStatus';
 import ChatAssistant from './features/core/components/ChatAssistant';
 import FloatingBackground from './features/core/components/FloatingBackground';
 import './App.css';
+
+// ─── Code Splitting: Ultra-Fast On-Demand Loading ────────────────────────────
+const Home = lazy(() => import('./features/info/pages/Home'));
+const Scanner = lazy(() => import('./features/scanner/pages/Scanner'));
+const ProductDetails = lazy(() => import('./features/product/pages/ProductDetails'));
+const HowItWorks = lazy(() => import('./features/info/pages/HowItWorks'));
+const About = lazy(() => import('./features/info/pages/About'));
+const Insights = lazy(() => import('./features/info/pages/Insights'));
+const PrivacyPolicy = lazy(() => import('./features/info/pages/PrivacyPolicy'));
+const TermsOfService = lazy(() => import('./features/info/pages/TermsOfService'));
+const ApiDocumentation = lazy(() => import('./features/info/pages/ApiDocumentation'));
+const Login = lazy(() => import('./features/auth/pages/Login'));
+const Signup = lazy(() => import('./features/auth/pages/Signup'));
+const Profile = lazy(() => import('./features/user/pages/Profile'));
+const OTPVerification = lazy(() => import('./features/auth/pages/OTPVerification'));
+const ForgotPassword = lazy(() => import('./features/auth/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('./features/auth/pages/ResetPassword'));
+const Compare = lazy(() => import('./features/product/pages/Compare'));
+const Admin = lazy(() => import('./features/info/pages/Admin'));
+const LabelScanner = lazy(() => import('./features/scanner/pages/LabelScanner'));
+const Dashboard = lazy(() => import('./features/user/pages/Dashboard'));
+
+// ─── QuantumPulse Loader Skeleton ───────────────────────────────────────────
+const PageLoader = () => (
+  <div className="container section-padding" style={{ display: 'flex', flexDirection: 'column', gap: '2rem' }}>
+    <div className="skeleton" style={{ height: '60px', width: '60%', borderRadius: '12px' }} />
+    <div className="skeleton" style={{ height: '300px', width: '100%', borderRadius: '24px' }} />
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '1.5rem' }}>
+      <div className="skeleton" style={{ height: '150px' }} />
+      <div className="skeleton" style={{ height: '150px' }} />
+      <div className="skeleton" style={{ height: '150px' }} />
+    </div>
+  </div>
+);
 
 // Component to scroll to top on route change
 function ScrollToTop() {
@@ -46,29 +61,31 @@ function AnimatedRoutes() {
 
   return (
     <AnimatePresence mode="wait">
-      <Routes location={location} key={location.pathname}>
-        <Route path="/" element={<Home />} />
-        <Route path="/scan" element={<Scanner />} />
-        <Route path="/product/:barcode" element={<ProductDetails />} />
-        <Route path="/how-it-works" element={<HowItWorks />} />
-        <Route path="/about" element={<About />} />
-        <Route path="/insights" element={<Insights />} />
-        <Route path="/compare" element={<Compare />} />
-        <Route path="/admin" element={<Admin />} />
-        <Route path="/label-scan" element={<LabelScanner />} />
-        <Route path="/privacy-policy" element={<PrivacyPolicy />} />
-        <Route path="/terms-of-service" element={<TermsOfService />} />
-        <Route path="/api-documentation" element={<ApiDocumentation />} />
+      <Suspense fallback={<PageLoader />}>
+        <Routes location={location} key={location.pathname}>
+          <Route path="/" element={<Home />} />
+          <Route path="/scan" element={<Scanner />} />
+          <Route path="/product/:barcode" element={<ProductDetails />} />
+          <Route path="/how-it-works" element={<HowItWorks />} />
+          <Route path="/about" element={<About />} />
+          <Route path="/insights" element={<Insights />} />
+          <Route path="/compare" element={<Compare />} />
+          <Route path="/admin" element={<Admin />} />
+          <Route path="/label-scan" element={<LabelScanner />} />
+          <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+          <Route path="/terms-of-service" element={<TermsOfService />} />
+          <Route path="/api-documentation" element={<ApiDocumentation />} />
 
-        {/* Authentication Routes */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route path="/profile" element={<Profile />} />
-        <Route path="/dashboard" element={<Dashboard />} />
-        <Route path="/verify-otp" element={<OTPVerification />} />
-        <Route path="/forgot-password" element={<ForgotPassword />} />
-        <Route path="/reset-password" element={<ResetPassword />} />
-      </Routes>
+          {/* Authentication Routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route path="/profile" element={<Profile />} />
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/verify-otp" element={<OTPVerification />} />
+          <Route path="/forgot-password" element={<ForgotPassword />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
+        </Routes>
+      </Suspense>
     </AnimatePresence>
   );
 }
