@@ -179,7 +179,9 @@ function authenticateToken(req, res, next) {
 }
 
 // ─── OTP Helpers ──────────────────────────────────────────────────────────────
-const isDevMode = () => !process.env.SMTP_USER || !process.env.SMTP_PASS;
+const isDevMode = () => 
+    process.env.NODE_ENV !== 'production' && 
+    (!process.env.SMTP_USER || !process.env.SMTP_PASS);
 
 const OTPSchema = new mongoose.Schema({
     email: { type: String, required: true, lowercase: true, trim: true },
@@ -393,10 +395,18 @@ app.post('/api/auth/signup', async (req, res) => {
         await sendOTPEmail(emailLower, otp, 'signup');
 
         const response = { success: true, message: 'OTP sent to your email. Please verify to complete registration.', email: emailLower };
+        
+        // ONLY expose OTP in response if explicitly in non-production dev mode
         if (isDevMode()) { 
             response.devOtp = otp; 
             response.message = 'DEV MODE: Your OTP is shown below. Enter it to verify.'; 
+        } else if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+            // In production, if SMTP is missing, we must warn but NOT leak OTP
+            return res.status(500).json({ 
+                message: 'Email service is not configured in this environment. Signup is currently unavailable.' 
+            });
         }
+
         return res.status(201).json(response);
     } catch (err) {
         console.error('Signup error:', err);

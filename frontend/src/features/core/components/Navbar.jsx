@@ -47,7 +47,6 @@ function LiveDateTime() {
 }
 
 const Navbar = () => {
-    const { theme, toggleTheme } = useTheme();
     const { isAuthenticated, user, logout } = useAuth();
     const [showUserMenu, setShowUserMenu] = useState(false);
     const [scrolled, setScrolled] = useState(false);
@@ -170,7 +169,7 @@ const Navbar = () => {
                         { label: 'Home', path: '/' },
                         { label: 'Scanner', path: '/scan' },
                         { label: 'Compare', path: '/compare' },
-                        { label: 'Dashboard', path: '/dashboard' }
+                        { label: 'How It Works', path: '/how-it-works' }
                     ].map((item) => (
                         <Link
                             key={item.label}
@@ -183,9 +182,9 @@ const Navbar = () => {
                             onMouseEnter={e => {
                                 e.target.style.color = '#f1f5f9';
                                 e.target.style.transform = 'translateY(-1px)';
-                                // QuantumPulse Pre-fetching Logic (Triggers browser to load the page chunk before click)
+                                // QuantumPulse Pre-fetching Logic 
                                 try { 
-                                    const feature = item.path === '/' ? 'Home' : item.label;
+                                    const feature = item.path === '/' ? 'Home' : item.label.replace(/ /g, '');
                                     import(`../../${item.path.includes('scan') ? 'scanner' : item.path.includes('dashboard') ? 'user' : 'info'}/pages/${feature}.jsx`);
                                 } catch(e) {}
                             }}
@@ -199,16 +198,8 @@ const Navbar = () => {
                     ))}
                 </div>
 
-                {/* Right side — theme, auth, datetime */}
+                {/* Right side — auth, datetime */}
                 <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-                    <button onClick={toggleTheme} style={{
-                        background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
-                        padding: '0.5rem', borderRadius: '50%', color: '#f1f5f9',
-                        cursor: 'pointer', display: 'flex', alignItems: 'center', transition: 'all 0.3s'
-                    }}>
-                        {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
-                    </button>
-
                     {isAuthenticated ? (
                         <div style={{ position: 'relative' }}>
                             <button onClick={() => setShowUserMenu(!showUserMenu)} style={{
