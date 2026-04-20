@@ -121,6 +121,37 @@ const ProfileSchema = new mongoose.Schema({
 
 const Profile = mongoose.models.Profile || mongoose.model('Profile', ProfileSchema);
 
+// ─── Admin Models ─────────────────────────────────────────────────────────────
+const IngredientSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    code: { type: String, default: '' },
+    category: { type: String, default: 'general' },
+    riskLevel: { type: String, default: 'safe' },
+    description: { type: String, default: '' },
+    alternateNames: { type: [String], default: [] },
+}, { timestamps: true });
+
+const Ingredient = mongoose.models.Ingredient || mongoose.model('Ingredient', IngredientSchema);
+
+const FlaggedSchema = new mongoose.Schema({
+    name: { type: String, required: true },
+    code: { type: String, default: '' },
+    severity: { type: String, default: 'moderate', enum: ['low', 'moderate', 'high', 'critical'] },
+    reason: { type: String, default: '' },
+    source: { type: String, default: 'Admin' },
+    affectedProducts: { type: [String], default: [] },
+    isActive: { type: Boolean, default: true },
+}, { timestamps: true });
+
+const Flagged = mongoose.models.Flagged || mongoose.model('Flagged', FlaggedSchema);
+
+const AdminLogSchema = new mongoose.Schema({
+    action: { type: String, required: true },
+    details: { type: mongoose.Schema.Types.Mixed, default: {} },
+}, { timestamps: true });
+
+const AdminLog = mongoose.models.AdminLog || mongoose.model('AdminLog', AdminLogSchema);
+
 // ─── JWT Helpers ──────────────────────────────────────────────────────────────
 const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-secure-jwt-secret-2026';
 
@@ -601,6 +632,255 @@ app.post('/api/profile/intake', authenticateToken, async (req, res) => {
         return res.json({ success: true, intake: profile.intake });
     } catch (err) {
         return res.status(500).json({ message: 'Server error' });
+    }
+});
+
+// ─── ADMIN ROUTES ─────────────────────────────────────────────────────────────
+const ADMIN_EMAIL = 'admin@truefoodbite.com';
+const ADMIN_PASSWORD = 'admin123';
+
+const authenticateAdmin = (req, res, next) => {
+    const authHeader = req.headers['x-admin-token'];
+    if (!authHeader || authHeader !== 'admin-session-active') {
+        return res.status(401).json({ success: false, message: 'Admin authentication required' });
+    }
+    next();
+};
+
+async function logAdminAction(action, details = {}) {
+    try {
+        await AdminLog.create({ action, details });
+    } catch (err) {
+        console.error('Failed to log admin action:', err.message);
+    }
+}
+
+// POST /api/admin/login
+app.post('/api/admin/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
+            await logAdminAction('admin_login', { email });
+            return res.json({ success: true, message: 'Admin login successful', token: 'admin-session-active' });
+        }
+        return res.status(401).json({ success: false, message: 'Invalid admin credentials' });
+    } catch (error) {
+        console.error('Admin login error:', error);
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// GET /api/admin/stats
+app.get('/api/admin/stats', authenticateAdmin, async (req, res) => {
+    try {
+        const [allUsers, allProfiles, ingredientCount, flaggedCount, recentLogs] = await Promise.all([
+            User.find({}).lean(),
+            Profile.find({}).lean(),
+            Ingredient.countDocuments(),
+            Flagged.countDocuments(),
+            AdminLog.find({}).sort({ createdAt: -1 }).limit(20).lean(),
+        ]);
+
+        const totalUsers = allUsers.length;
+        const verifiedUsers = allUsers.filter(u => u.isVerified).length;
+        const unverifiedUsers = totalUsers - verifiedUsers;
+
+        let totalScans = 0;
+        let topProducts = {};
+        allProfiles.forEach(p => {
+            (p.history || []).forEach(h => {
+                totalScans++;
+                const name = h.productName || 'Unknown';
+                topProducts[name] = (topProducts[name] || 0) + 1;
+            });
+        });
+
+        const topProductsList = Object.entries(topProducts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([name, count]) => ({ name, scans: count }));
+
+        const conditionCounts = {};
+        allProfiles.forEach(p => {
+            (p.chronicDiseases || []).forEach(d => {
+                conditionCounts[d] = (conditionCounts[d] || 0) + 1;
+            });
+        });
+
+        res.json({
+            success: true,
+            stats: {
+                totalUsers, verifiedUsers, unverifiedUsers,
+                totalProfiles: allProfiles.length,
+                totalScans,
+                totalIngredients: ingredientCount,
+                totalFlagged: flaggedCount,
+                topProducts: topProductsList,
+                conditionCounts,
+                recentLogs
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// GET /api/admin/users
+app.get('/api/admin/users', authenticateAdmin, async (req, res) => {
+    try {
+        const allUsers = await User.find({}).select('+password').lean();
+        const allProfiles = await Profile.find({}).lean();
+        const profileMap = {};
+        allProfiles.forEach(p => { profileMap[p.email] = p; });
+
+        const users = allUsers.map(u => {
+            const profile = profileMap[u.email] || {};
+            return {
+                email: u.email,
+                firstName: u.firstName,
+                lastName: u.lastName,
+                passwordHash: u.password || '',
+                isVerified: u.isVerified,
+                createdAt: u.createdAt,
+                lastLogin: u.lastLogin || null,
+                scanCount: (profile.history || []).length,
+                chronicDiseases: profile.chronicDiseases || [],
+            };
+        });
+        res.json({ success: true, users });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// DELETE /api/admin/users/:email
+app.delete('/api/admin/users/:email', authenticateAdmin, async (req, res) => {
+    try {
+        const email = decodeURIComponent(req.params.email).toLowerCase();
+        await User.findOneAndDelete({ email });
+        await Profile.findOneAndDelete({ email });
+        await logAdminAction('delete_user', { email });
+        res.json({ success: true, message: `User ${email} deleted` });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// PUT /api/admin/users/:email/toggle-verify
+app.put('/api/admin/users/:email/toggle-verify', authenticateAdmin, async (req, res) => {
+    try {
+        const email = decodeURIComponent(req.params.email).toLowerCase();
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ success: false, message: 'Not found' });
+        user.isVerified = !user.isVerified;
+        await user.save();
+        await logAdminAction('toggle_verify', { email, isVerified: user.isVerified });
+        res.json({ success: true, message: 'Status updated' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// PUT /api/admin/users/:email/password
+app.put('/api/admin/users/:email/password', authenticateAdmin, async (req, res) => {
+    try {
+        const email = decodeURIComponent(req.params.email).toLowerCase();
+        const user = await User.findOne({ email });
+        if (!user) return res.status(404).json({ success: false, message: 'Not found' });
+        const { newPassword } = req.body;
+        if (!newPassword || newPassword.length < 4) return res.status(400).json({ success: false, message: 'Too short' });
+        user.password = newPassword;
+        await user.save();
+        await logAdminAction('change_pw', { email });
+        res.json({ success: true, message: 'Password updated' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// GET /api/admin/ingredients
+app.get('/api/admin/ingredients', authenticateAdmin, async (req, res) => {
+    try {
+        const ingredients = await Ingredient.find({}).lean();
+        res.json({ success: true, ingredients });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// POST /api/admin/ingredients
+app.post('/api/admin/ingredients', authenticateAdmin, async (req, res) => {
+    try {
+        const ingredient = await Ingredient.create(req.body);
+        await logAdminAction('add_ingredient', { name: ingredient.name });
+        res.json({ success: true, ingredient });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// PUT /api/admin/ingredients/:id
+app.put('/api/admin/ingredients/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const ingredient = await Ingredient.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+        await logAdminAction('update_ingredient', { name: ingredient?.name });
+        res.json({ success: true, ingredient });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// DELETE /api/admin/ingredients/:id
+app.delete('/api/admin/ingredients/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const ingredient = await Ingredient.findByIdAndDelete(req.params.id);
+        await logAdminAction('delete_ingredient', { name: ingredient?.name });
+        res.json({ success: true, message: 'Deleted' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// GET /api/admin/flagged
+app.get('/api/admin/flagged', authenticateAdmin, async (req, res) => {
+    try {
+        const flagged = await Flagged.find({}).lean();
+        res.json({ success: true, flagged });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// POST /api/admin/flagged
+app.post('/api/admin/flagged', authenticateAdmin, async (req, res) => {
+    try {
+        const flagged = await Flagged.create(req.body);
+        await logAdminAction('flag_substance', { name: flagged.name });
+        res.json({ success: true, flagged });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// PUT /api/admin/flagged/:id
+app.put('/api/admin/flagged/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const flagged = await Flagged.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+        await logAdminAction('update_flagged', { name: flagged?.name });
+        res.json({ success: true, flagged });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
+    }
+});
+
+// DELETE /api/admin/flagged/:id
+app.delete('/api/admin/flagged/:id', authenticateAdmin, async (req, res) => {
+    try {
+        const flagged = await Flagged.findByIdAndDelete(req.params.id);
+        await logAdminAction('unflag_substance', { name: flagged?.name });
+        res.json({ success: true, message: 'Removed' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 });
 
