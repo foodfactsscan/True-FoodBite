@@ -24,7 +24,7 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import mongoSanitize from 'mongo-sanitize';
 import hpp from 'hpp';
-import xss from 'xss-clean';
+import xss from 'xss';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 const app = express();
@@ -36,7 +36,16 @@ app.use(helmet({
 app.use(express.json({ limit: '10kb' })); // STRICT limit on payload size
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(mongoSanitize()); // Prevent NoSQL Injection
-app.use(xss()); // Prevent basic XSS
+app.use((req, res, next) => {
+    if (req.body) {
+        Object.keys(req.body).forEach(key => {
+            if (typeof req.body[key] === 'string') {
+                req.body[key] = xss(req.body[key]);
+            }
+        });
+    }
+    next();
+});
 app.use(hpp()); // Prevent HTTP Parameter Pollution
 
 // Rate Limiters
