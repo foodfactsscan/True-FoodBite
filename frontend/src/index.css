@@ -212,4 +212,57 @@ p { font-size: var(--font-size-base); color: var(--color-text-muted); }
   border-radius: 10px;
   border: 2px solid var(--color-bg);
 }
-::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+::-webkit-scrollbar-thumb:hover { background: var(--color-text-muted); }
+
+/* ──────────────────────────────────────────────────────────────────────────────
+   Product Details System (Split-Screen Layout)
+   ────────────────────────────────────────────────────────────────────────────── */
+.product-grid {
+  display: grid;
+  grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+  gap: 4rem;
+  align-items: flex-start;
+  margin-top: 1rem;
+}
+
+.sticky-image-container {
+  position: sticky;
+  top: 100px;
+  z-index: 10;
+  transition: all 0.3s ease;
+}
+
+.chip {
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  font-weight: 700;
+  border: 1px solid var(--color-glass-border);
+  backdrop-filter: blur(8px);
+}
+
+/* Fluid Layout Adapters */
+@media (max-width: 1200px) {
+  .product-grid {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  
+  .sticky-image-container {
+    position: relative;
+    top: 0;
+    max-width: 600px;
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 768px) {
+  .product-grid {
+    gap: 1.5rem;
+  }
+  
+  .product-title-main {
+    font-size: clamp(2rem, 1.5rem + 2vw, 2.5rem) !important;
+  }
+}
+

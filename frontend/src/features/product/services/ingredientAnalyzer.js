@@ -315,9 +315,13 @@ const CAT_LABELS = {
 
 function lookupIngredient(name) {
     const lower = name.toLowerCase().trim();
-    // Exact match first, then partial
+    // 1. Exact match first (highest fidelity)
     for (const entry of DB) {
-        if (lower === entry.p || lower.includes(entry.p) || entry.p.includes(lower)) {
+        if (lower === entry.p) return entry;
+    }
+    // 2. Partial match fallback
+    for (const entry of DB) {
+        if (lower.includes(entry.p) || entry.p.includes(lower)) {
             return entry;
         }
     }

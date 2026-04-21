@@ -118,7 +118,7 @@ export default function HealthScoreCard({ product, userProfile }) {
                 </div>
 
                 {/* Verdict Info */}
-                <div style={{ flex: 1, minWidth: '240px' }}>
+                <div style={{ flex: 1, minWidth: '0' }}>
                     <div style={{ 
                         fontSize: '1.75rem', 
                         fontWeight: '800', 
@@ -144,16 +144,20 @@ export default function HealthScoreCard({ product, userProfile }) {
                             
                             return (
                                 <span key={i} style={{
-                                    padding: '0.35rem 0.75rem',
-                                    borderRadius: '8px',
-                                    fontSize: '0.75rem',
+                                    padding: '0.4rem 0.8rem',
+                                    borderRadius: '10px',
+                                    fontSize: '0.8rem',
                                     fontWeight: '700',
                                     background: bgColor,
                                     color: textColor,
                                     border: `1px solid ${borderColor}`,
-                                    display: 'flex',
+                                    display: 'inline-flex',
                                     alignItems: 'center',
-                                    gap: '0.35rem'
+                                    gap: '0.4rem',
+                                    lineHeight: '1.4',
+                                    wordBreak: 'break-word',
+                                    maxWidth: '100%',
+                                    transition: 'all 0.2s ease'
                                 }}>
                                     {tag}
                                 </span>

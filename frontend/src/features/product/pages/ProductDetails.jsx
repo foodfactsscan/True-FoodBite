@@ -87,50 +87,53 @@ const ProductDetails = () => {
             </div>
 
             <div className="product-grid">
-                {/* LEFT COLUMN: FIXED/STICKY IMAGE */}
+                {/* LEFT COLUMN: FIXED/STICKY IMAGE & PRIMARY DATA */}
                 <div className="sticky-image-container">
                     <motion.div 
                         initial={{ x: -20, opacity: 0 }}
                         animate={{ x: 0, opacity: 1 }}
                         className="glass-panel" 
                         style={{ 
-                            padding: '2.5rem', 
+                            padding: '2rem', 
                             borderRadius: '32px', 
-                            background: 'rgba(255,255,255,0.03)', 
-                            border: '1px solid rgba(255,255,255,0.08)',
+                            background: 'rgba(255,255,255,0.02)', 
+                            border: '1px solid rgba(255,255,255,0.05)',
                             textAlign: 'center',
                             boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.5)'
                         }}
                     >
                         <div style={{ 
                             background: '#fff', 
-                            borderRadius: '20px', 
+                            borderRadius: '24px', 
                             padding: '2rem',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'center',
                             marginBottom: '1.5rem',
-                            minHeight: '350px'
+                            minHeight: '380px',
+                            overflow: 'hidden'
                         }}>
                             <img 
                                 src={product.image_front_url || 'https://placehold.co/400x600?text=No+Image'} 
                                 alt={product.product_name} 
-                                style={{ maxWidth: '100%', maxHeight: '400px', objectFit: 'contain' }} 
+                                style={{ maxWidth: '100%', maxHeight: '340px', objectFit: 'contain' }} 
                             />
                         </div>
-                        <div style={{ textAlign: 'left', padding: '0 0.5rem' }}>
-                            <div style={{ color: '#94a3b8', fontSize: '0.8rem', fontWeight: '600', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Barcode</div>
-                            <div style={{ fontSize: '1.1rem', fontWeight: '700', letterSpacing: '0.05em' }}>{barcode}</div>
-                        </div>
-                        <div style={{ marginTop: '1.5rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                             {product.quantity && <span className="chip" style={{ background: 'rgba(255,255,255,0.05)', color: '#fff' }}>{product.quantity}</span>}
-                             <span className="chip" style={{ background: 'rgba(255,255,255,0.05)', color: '#fff' }}>{product.brands}</span>
+
+                        <div style={{ textAlign: 'left', padding: '0 0.75rem' }}>
+                            <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', fontWeight: '800', textTransform: 'uppercase', marginBottom: '0.25rem', letterSpacing: '0.1em' }}>Barcode</div>
+                            <div style={{ fontSize: '1.25rem', fontWeight: '800', letterSpacing: '0.02em', color: '#fff', marginBottom: '1.25rem' }}>{barcode}</div>
+                            
+                            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                                 {product.quantity && <span className="chip">{product.quantity}</span>}
+                                 {product.brands && <span className="chip" style={{ color: 'var(--color-primary)' }}>{product.brands}</span>}
+                            </div>
                         </div>
                     </motion.div>
                 </div>
 
-                {/* RIGHT COLUMN: SCROLLING DETAILS */}
-                <div style={{ flex: 1 }}>
+                {/* RIGHT COLUMN: SCROLLING DETAILS - with overflow protection */}
+                <div style={{ flex: '1', minWidth: '0' }}>
                     <div style={{ marginBottom: '3rem' }}>
                         <h1 className="product-title-main" style={{ fontSize: '3.5rem', fontWeight: '900', lineHeight: '1.1', marginBottom: '0.5rem', letterSpacing: '-0.03em' }}>
                             {product.product_name}

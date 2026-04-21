@@ -20,30 +20,68 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import nodemailer from 'nodemailer';
 import crypto from 'crypto';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import mongoSanitize from 'mongo-sanitize';
+import hpp from 'hpp';
+import xss from 'xss-clean';
 
 // ─── App ──────────────────────────────────────────────────────────────────────
 const app = express();
 
+// ─── Security Middleware ──────────────────────────────────────────────────────
+app.use(helmet({
+    contentSecurityPolicy: false, // Set to false if it breaks QR/external images; otherwise configure properly
+}));
+app.use(express.json({ limit: '10kb' })); // STRICT limit on payload size
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+app.use(mongoSanitize()); // Prevent NoSQL Injection
+app.use(xss()); // Prevent basic XSS
+app.use(hpp()); // Prevent HTTP Parameter Pollution
+
+// Rate Limiters
+const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { message: 'Too many requests from this IP, please try again after 15 minutes.' }
+});
+
+const authLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { message: 'Too many authentication attempts. Please try again later.' }
+});
+
+const otpLimiter = rateLimit({
+    windowMs: 10 * 60 * 1000,
+    max: 5,
+    message: { message: 'Too many OTP requests. Please wait 10 minutes.' }
+});
+
+// Apply general limiter
+app.use('/api/', apiLimiter);
+
 // ─── CORS ─────────────────────────────────────────────────────────────────────
+const allowedOrigins = [
+    'https://truefoodbite.vercel.app',
+    'https://true-foodbite.vercel.app',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173'
+];
+
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin) return callback(null, true);
-        if (origin.startsWith('http://localhost:') || origin.startsWith('http://127.0.0.1:')) {
+        if (process.env.NODE_ENV !== 'production' && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1'))) {
             return callback(null, true);
         }
-        if (origin.endsWith('.vercel.app') && (origin.includes('truefoodbite') || origin.includes('true-foodbite'))) {
+        if (allowedOrigins.includes(origin) || origin.endsWith('.vercel.app')) {
             return callback(null, true);
         }
-        if (process.env.CLIENT_URL && origin === process.env.CLIENT_URL) {
-            return callback(null, true);
-        }
-        callback(new Error(`CORS: Origin not allowed: ${origin}`));
+        callback(new Error(`CORS policy blockage for origin: ${origin}`));
     },
     credentials: true,
 }));
-
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true }));
 
 // ─── MongoDB Connection (cached for Vercel warm containers) ───────────────────
 let connectionPromise = null;
@@ -77,12 +115,12 @@ mongoose.connection.on('error', () => { connectionPromise = null; });
 // ─── User Model ───────────────────────────────────────────────────────────────
 const UserSchema = new mongoose.Schema({
     firstName: { type: String, required: true, trim: true },
-    lastName:  { type: String, required: true, trim: true },
-    email:     { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password:  { type: String, required: true, minlength: 6, select: false },
+    lastName: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    password: { type: String, required: true, minlength: 6, select: false },
     isVerified: { type: Boolean, default: false },
     verifiedAt: { type: Date, default: null },
-    lastLogin:  { type: Date, default: null },
+    lastLogin: { type: Date, default: null },
 }, { timestamps: true });
 
 UserSchema.pre('save', async function (next) {
@@ -100,23 +138,23 @@ const User = mongoose.models.User || mongoose.model('User', UserSchema);
 
 // ─── Profile Model ────────────────────────────────────────────────────────────
 const ProfileSchema = new mongoose.Schema({
-    email:       { type: String, required: true, unique: true, lowercase: true },
-    firstName:   String,
-    lastName:    String,
+    email: { type: String, required: true, unique: true, lowercase: true },
+    firstName: String,
+    lastName: String,
     profilePhoto: String,
-    gender:      String,
-    age:         Number,
-    heightCm:    Number,
-    weightKg:    Number,
-    goal:        String,
-    chronicDiseases:    { type: [String], default: [] },
-    temporaryIssues:    { type: [String], default: [] },
+    gender: String,
+    age: Number,
+    heightCm: Number,
+    weightKg: Number,
+    goal: String,
+    chronicDiseases: { type: [String], default: [] },
+    temporaryIssues: { type: [String], default: [] },
     customHealthIssues: { type: [String], default: [] },
-    customGoals:        { type: [String], default: [] },
-    history:   { type: Array, default: [] },
+    customGoals: { type: [String], default: [] },
+    history: { type: Array, default: [] },
     favorites: { type: Array, default: [] },
-    notes:     { type: Array, default: [] },
-    intake:    { type: Array, default: [] },
+    notes: { type: Array, default: [] },
+    intake: { type: Array, default: [] },
 }, { timestamps: true });
 
 const Profile = mongoose.models.Profile || mongoose.model('Profile', ProfileSchema);
@@ -153,13 +191,17 @@ const AdminLogSchema = new mongoose.Schema({
 const AdminLog = mongoose.models.AdminLog || mongoose.model('AdminLog', AdminLogSchema);
 
 // ─── JWT Helpers ──────────────────────────────────────────────────────────────
-const JWT_SECRET = process.env.JWT_SECRET || 'truefoodbite-secure-jwt-secret-2026';
+const JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET && process.env.NODE_ENV === 'production') {
+    throw new Error('FATAL: JWT_SECRET environment variable is missing in production!');
+}
+const SAFE_SECRET = JWT_SECRET || 'dev-only-secret-do-not-use-in-prod';
 
 function generateToken(user) {
     return jwt.sign(
         { id: user._id, email: user.email, firstName: user.firstName, lastName: user.lastName },
-        JWT_SECRET,
-        { expiresIn: '30d' }
+        SAFE_SECRET,
+        { expiresIn: '7d' } // Reduced from 30d for better security
     );
 }
 
@@ -169,18 +211,18 @@ function authenticateToken(req, res, next) {
         return res.status(401).json({ message: 'Authentication required' });
     }
     try {
-        const decoded = jwt.verify(auth.split(' ')[1], JWT_SECRET);
+        const decoded = jwt.verify(auth.split(' ')[1], SAFE_SECRET);
         req.userEmail = decoded.email;
-        req.userId    = decoded.id;
+        req.userId = decoded.id;
         next();
     } catch {
-        return res.status(401).json({ message: 'Invalid or expired token. Please login again.' });
+        return res.status(401).json({ message: 'Invalid or expired session. Please login again.' });
     }
 }
 
 // ─── OTP Helpers ──────────────────────────────────────────────────────────────
-const isDevMode = () => 
-    process.env.NODE_ENV !== 'production' && 
+const isDevMode = () =>
+    process.env.NODE_ENV !== 'production' &&
     (!process.env.SMTP_USER || !process.env.SMTP_PASS);
 
 const OTPSchema = new mongoose.Schema({
@@ -263,17 +305,17 @@ async function fetchLiveNews() {
         const response = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36' }
         });
-        
+
         if (!response.ok) throw new Error(`News fetch failed: ${response.status}`);
         const xml = await response.text();
-        
+
         const items = [];
         // More robust item split that handles line breaks and nested tags better
         const itemBlocks = xml.split('<item>').slice(1);
 
         for (const block of itemBlocks) {
             const cleanBlock = block.split('</item>')[0];
-            
+
             // Helper to extract content from tags (including CDATA)
             const getTag = (tag) => {
                 const match = cleanBlock.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`));
@@ -309,7 +351,7 @@ async function fetchLiveNews() {
         }
 
         console.log(`✅ Successfully fetched ${items.length} news items.`);
-        
+
         if (items.length === 0) {
             console.warn('⚠️ No news items parsed from feed.');
         }
@@ -356,28 +398,32 @@ app.get('/api/news', async (req, res) => {
 });
 
 // POST /api/auth/signup
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', otpLimiter, async (req, res) => {
     try {
         const { firstName, lastName, email, password } = req.body;
         if (!firstName || !lastName || !email || !password) {
             return res.status(400).json({ message: 'All fields are required' });
         }
-        if (password.length < 6) {
-            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        if (password.length < 8) { // Increased min length
+            return res.status(400).json({ message: 'Password must be at least 8 characters' });
         }
         const emailLower = email.toLowerCase().trim();
-        
+
         // 1. Check if verified user exists
         const existing = await User.findOne({ email: emailLower });
         if (existing && existing.isVerified) {
-            return res.status(400).json({ message: 'Email already registered. Please login.' });
+            // UNIFORM RESPONSE: Don't explicitly say user exists to prevent harvesting
+            // But for signup, the user needs to know they should login instead.
+            // We can return a generic "Email processing success" but then they won't know why login fails.
+            // Balancing security vs UX: Standard practice for signup is to say "Account exists".
+            return res.status(400).json({ message: 'This email is already registered. Please login.' });
         }
-        
+
         // 2. Create or update unverified user
         if (existing) {
             existing.firstName = firstName;
-            existing.lastName  = lastName;
-            existing.password  = password;
+            existing.lastName = lastName;
+            existing.password = password;
             await existing.save();
         } else {
             await User.create({ firstName, lastName, email: emailLower, password });
@@ -395,15 +441,15 @@ app.post('/api/auth/signup', async (req, res) => {
         await sendOTPEmail(emailLower, otp, 'signup');
 
         const response = { success: true, message: 'OTP sent to your email. Please verify to complete registration.', email: emailLower };
-        
+
         // ONLY expose OTP in response if explicitly in non-production dev mode
-        if (isDevMode()) { 
-            response.devOtp = otp; 
-            response.message = 'DEV MODE: Your OTP is shown below. Enter it to verify.'; 
+        if (isDevMode()) {
+            response.devOtp = otp;
+            response.message = 'DEV MODE: Your OTP is shown below. Enter it to verify.';
         } else if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
             // In production, if SMTP is missing, we must warn but NOT leak OTP
-            return res.status(500).json({ 
-                message: 'Email service is not configured in this environment. Signup is currently unavailable.' 
+            return res.status(500).json({
+                message: 'Email service is not configured in this environment. Signup is currently unavailable.'
             });
         }
 
@@ -415,33 +461,33 @@ app.post('/api/auth/signup', async (req, res) => {
 });
 
 // POST /api/auth/verify-otp
-app.post('/api/auth/verify-otp', async (req, res) => {
+app.post('/api/auth/verify-otp', authLimiter, async (req, res) => {
     try {
         const { email, otp, type } = req.body;
-        const emailLower  = email.toLowerCase().trim();
-        
+        const emailLower = email.toLowerCase().trim();
+
         // Find OTP in DB
         const otpData = await OTP.findOne({ email: emailLower, type });
-        
+
         if (!otpData) {
             return res.status(400).json({ message: 'No OTP found or expired. Please request a new one.' });
         }
-        
+
         if (Date.now() > otpData.expiresAt.getTime()) {
             await OTP.deleteOne({ _id: otpData._id });
             return res.status(400).json({ message: 'OTP has expired. Please request a new one.' });
         }
-        
+
         if (otpData.otp !== otp.trim()) {
             otpData.attempts++;
-            if (otpData.attempts >= 5) { 
-                await OTP.deleteOne({ _id: otpData._id }); 
-                return res.status(400).json({ message: 'Too many attempts. Request a new OTP.' }); 
+            if (otpData.attempts >= 5) {
+                await OTP.deleteOne({ _id: otpData._id });
+                return res.status(400).json({ message: 'Too many attempts. Request a new OTP.' });
             }
             await otpData.save();
             return res.status(400).json({ message: `Invalid OTP. ${5 - otpData.attempts} attempts remaining.` });
         }
-        
+
         // OTP is valid!
         await OTP.deleteOne({ _id: otpData._id });
 
@@ -462,7 +508,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
 });
 
 // POST /api/auth/resend-otp
-app.post('/api/auth/resend-otp', async (req, res) => {
+app.post('/api/auth/resend-otp', otpLimiter, async (req, res) => {
     try {
         const { email, type } = req.body;
         const emailLower = email.toLowerCase().trim();
@@ -470,7 +516,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
             const exists = await User.findOne({ email: emailLower });
             if (!exists) return res.status(404).json({ message: 'No account found with this email' });
         }
-        
+
         const otp = generateOTP();
         await OTP.findOneAndUpdate(
             { email: emailLower, type },
@@ -489,7 +535,7 @@ app.post('/api/auth/resend-otp', async (req, res) => {
 });
 
 // POST /api/auth/login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!email || !password) {
@@ -497,30 +543,34 @@ app.post('/api/auth/login', async (req, res) => {
         }
         const emailLower = email.toLowerCase().trim();
         const user = await User.findOne({ email: emailLower }).select('+password');
+        
+        // UNIFORM RESPONSE: Never say "Email not found" vs "Wrong password"
+        const invalidMsg = 'Invalid email or password.';
+        
         if (!user || !(await user.comparePassword(password))) {
-            return res.status(401).json({ message: 'Invalid email or password.' });
+            return res.status(401).json({ message: invalidMsg });
         }
         if (!user.isVerified) {
-            return res.status(403).json({ message: 'Email not verified. Please sign up again to verify.', needsVerification: true });
+            return res.status(403).json({ message: 'Email not verified. Please check your inbox.', needsVerification: true });
         }
         user.lastLogin = new Date();
         await user.save();
         const token = generateToken(user);
         return res.json({ success: true, message: 'Login successful', token, user: { firstName: user.firstName, lastName: user.lastName, email: user.email, isVerified: true } });
     } catch (err) {
-        console.error('Login error:', err);
-        return res.status(500).json({ message: 'Server error during login. Please try again.' });
+        console.error('Login security block:', err.message);
+        return res.status(500).json({ message: 'System error during authentication.' });
     }
 });
 
 // POST /api/auth/forgot-password
-app.post('/api/auth/forgot-password', async (req, res) => {
+app.post('/api/auth/forgot-password', authLimiter, async (req, res) => {
     try {
         const emailLower = req.body.email?.toLowerCase().trim();
         if (!emailLower) return res.status(400).json({ message: 'Email is required' });
         const user = await User.findOne({ email: emailLower });
         if (!user) return res.status(404).json({ message: 'No account found with this email' });
-        
+
         const otp = generateOTP();
         await OTP.findOneAndUpdate(
             { email: emailLower, type: 'forgot-password' },
@@ -539,7 +589,7 @@ app.post('/api/auth/forgot-password', async (req, res) => {
 });
 
 // POST /api/auth/reset-password
-app.post('/api/auth/reset-password', async (req, res) => {
+app.post('/api/auth/reset-password', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
         if (!password || password.length < 6) {
@@ -550,10 +600,10 @@ app.post('/api/auth/reset-password', async (req, res) => {
         if (!user) return res.status(404).json({ message: 'User not found' });
         user.password = password;
         await user.save();
-        
+
         // Final cleanup
         await OTP.deleteMany({ email: emailLower, type: 'forgot-password' });
-        
+
         return res.json({ success: true, message: 'Password reset successfully. Please login with your new password.' });
     } catch (err) {
         console.error('Reset password error:', err);
@@ -574,8 +624,8 @@ app.get('/api/profile', authenticateToken, async (req, res) => {
 
 app.put('/api/profile', authenticateToken, async (req, res) => {
     try {
-        const fields = ['firstName','lastName','profilePhoto','gender','age','heightCm','weightKg','goal',
-                        'chronicDiseases','temporaryIssues','customHealthIssues','customGoals'];
+        const fields = ['firstName', 'lastName', 'profilePhoto', 'gender', 'age', 'heightCm', 'weightKg', 'goal',
+            'chronicDiseases', 'temporaryIssues', 'customHealthIssues', 'customGoals'];
         const update = { email: req.userEmail };
         fields.forEach(f => { if (req.body[f] !== undefined) update[f] = req.body[f]; });
         const profile = await Profile.findOneAndUpdate({ email: req.userEmail }, { $set: update }, { new: true, upsert: true, runValidators: true });
@@ -666,7 +716,7 @@ async function logAdminAction(action, details = {}) {
 }
 
 // POST /api/admin/login
-app.post('/api/admin/login', async (req, res) => {
+app.post('/api/admin/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = req.body;
         if (email === ADMIN_EMAIL && password === ADMIN_PASSWORD) {
@@ -987,11 +1037,39 @@ app.get('/api/products/:barcode', async (req, res) => {
         if (!productData || !productData.ingredients_text || !productData.nutriments.energy_100g) {
             if (!apiKey) return res.status(200).json({ status: 0, message: 'Product not found and AI disabled' });
 
-            console.log('🤖 Using AI for product research/refinement...');
-            const prompt = `You are a food product database for Indian/Global packaged foods. 
-            Research barcode ${barcode}. Return ONLY valid JSON.
-            If you know this product, return: {"status":1,"product":{"product_name":"Name","brands":"Brand","quantity":"Xg","ingredients_text":"ingredients...","nutriments":{"energy_100g":0,"fat_100g":0,"saturated-fat_100g":0,"sugars_100g":0,"proteins_100g":0,"fiber_100g":0,"salt_100g":0,"sodium_100g":0,"carbohydrates_100g":0}}}.
-            If totally unknown, return {"status":0}. 
+            console.log('🤖 Using AI for High-Fidelity Research & Macro-Balancing...');
+            const prompt = `You are a food science expert for an Indian/Global food database. 
+            Detailed research for barcode ${barcode}. Return ONLY valid JSON.
+            
+            TASKS:
+            1. IDENTIFY: Product Name, Brand, Exact Weight/Quantity.
+            2. LABEL MIRRORING: Extract the EXACT ingredient names as they appear on the physical label.
+            3. SEMANTIC MACRO-BALANCING: 
+               - Estimate precise percentages (%) for EVERY base ingredient.
+               - ABSOLUTE 100% RULE: The sum of ALL percentages in the 'ingredients' array MUST EQUAL EXACTLY 100.00%.
+               - PARENT DEDUPLICATION: If "Noodles" consists of "Flour" and "Oil", do NOT list "Noodles" as an ingredient. List "Refined Wheat Flour", "Palm Oil", etc. as separate items so their sum is 100%.
+               - Constraint A: Must be in descending order of weight.
+               - Constraint B: Sum of percentages must be 100.00% (No more, no less).
+               - Constraint C: The sum of fat-heavy ingredients must align with total fat; carb-heavy with total carbs, etc.
+            4. NUTRITION: Extract precise data per 100g.
+            
+            REQUIRED JSON FORMAT: {
+              "status": 1,
+              "product": {
+                "product_name": "...",
+                "brands": "...",
+                "quantity": "...",
+                "ingredients_text": "EXACT_LABEL_TEXT",
+                "ingredients": [
+                  {"text": "Refined wheat flour", "percent_estimate": 62.5, "id": "en:wheat-flour"},
+                  {"text": "Palm oil", "percent_estimate": 14.5, "id": "en:palm-oil"}
+                ],
+                "nutriments": {
+                  "energy_100g": X, "fat_100g": X, "proteins_100g": X, "carbohydrates_100g": X, "sugars_100g": X, "salt_100g": X
+                }
+              }
+            }
+            If unknown, return {"status":0}. 
             Current context: ${productData ? JSON.stringify(productData) : 'None'}`;
 
             const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
@@ -1002,12 +1080,17 @@ app.get('/api/products/:barcode', async (req, res) => {
             if (geminiRes.ok) {
                 const aiData = await geminiRes.json();
                 let text = aiData?.candidates?.[0]?.content?.parts?.[0]?.text || '{"status":0}';
-                text = text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
                 try {
                     const parsed = JSON.parse(text);
                     if (parsed.status === 1) {
-                        // Merge or override
-                        productData = { ...productData, ...parsed.product };
+                        // ABSOLUTE SOURCE OF TRUTH: 
+                        // If AI gives us a high-fidelity ingredient list, we DISCARD the buggy API version entirely
+                        productData = { 
+                            ...productData, 
+                            ...parsed.product,
+                            ingredients_source: 'ai_refined'
+                        };
+                        console.log(`✅ Refined ingredients for ${barcode} using Semantic Macro-balancing.`);
                     }
                 } catch (pErr) { console.error('AI JSON Parse Error:', pErr); }
             }
