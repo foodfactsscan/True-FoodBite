@@ -23,6 +23,7 @@ import {
     FlaskConical, Eye, ShieldAlert, Leaf, List, BarChart3
 } from 'lucide-react';
 import { analyzeIngredientText } from '../services/ingredientAnalyzer';
+import PriceRadar from './PriceRadar';
 
 // ─── Risk Config ──────────────────────────────────────────────────────────────
 const RISK = {
@@ -330,7 +331,7 @@ const IngredientBreakdown = ({ product }) => {
     return (
         <div style={{ marginBottom: '3rem' }}>
             {/* Section Header */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '1rem' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ padding: '0.5rem', background: 'rgba(99,102,241,0.12)', borderRadius: '12px', border: '1px solid rgba(99,102,241,0.2)' }}>
                         <FlaskConical size={20} color="#818cf8" />
@@ -339,36 +340,77 @@ const IngredientBreakdown = ({ product }) => {
                         <h3 style={{ margin: 0, fontSize: '1.3rem', fontWeight: '800', letterSpacing: '-0.02em' }}>
                             Complete Ingredient Breakdown
                         </h3>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '4px' }}>
-                            <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748b' }}>
-                                {totalIngredients} ingredient{totalIngredients !== 1 ? 's' : ''} — highest quantity first
-                            </p>
-                            {product.ingredients_source === 'ai_refined' && (
-                                <span style={{ padding: '0.1rem 0.6rem', borderRadius: '8px', background: 'rgba(34,197,94,0.1)', color: '#4ade80', fontSize: '0.6rem', fontWeight: '800', border: '1px solid rgba(34,197,94,0.2)', textTransform: 'uppercase' }}>
-                                    ✨ 100% Mirror-Match Fidelity
-                                </span>
-                            )}
-                        </div>
+                        <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748b', marginTop: '2px' }}>
+                            {totalIngredients} ingredient{totalIngredients !== 1 ? 's' : ''} — highest quantity first
+                        </p>
                     </div>
                 </div>
 
-                {/* View Toggle */}
-                <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '0.25rem', border: '1px solid rgba(255,255,255,0.07)' }}>
-                    {[
-                        { key: 'list', Icon: List, label: 'List' },
-                        { key: 'summary', Icon: BarChart3, label: 'Summary' }
-                    ].map(({ key, Icon, label }) => (
-                        <button key={key} onClick={() => setView(key)} style={{
-                            display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.5rem 0.9rem',
-                            borderRadius: '10px', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '700',
-                            background: view === key ? 'rgba(99,102,241,0.3)' : 'transparent',
-                            color: view === key ? '#818cf8' : '#64748b',
-                            transition: 'all 0.2s'
+                {/* Accuracy & Price Pulse Badges */}
+                <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {product.ingredients_source === 'ai_refined' && (
+                        <div style={{ 
+                            padding: '0.4rem 0.75rem', 
+                            borderRadius: '12px', 
+                            background: 'rgba(34,197,94,0.1)', 
+                            color: '#4ade80', 
+                            fontSize: '0.75rem', 
+                            fontWeight: '800', 
+                            border: '1px solid rgba(34,197,94,0.2)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.4rem',
+                            boxShadow: '0 0 15px rgba(34,197,94,0.1)'
                         }}>
-                            <Icon size={14} /> {label}
-                        </button>
-                    ))}
+                             ✨ <span style={{ letterSpacing: '0.02em' }}>100% Mirror-Match Fidelity</span>
+                        </div>
+                    )}
+                    <div style={{ 
+                        padding: '0.5rem 0.8rem', 
+                        borderRadius: '12px', 
+                        background: 'rgba(99,102,241,0.06)', 
+                        color: '#a5b4fc', 
+                        fontSize: '0.75rem', 
+                        fontWeight: '800', 
+                        border: '1px solid rgba(99,102,241,0.15)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                    }}>
+                        ⚖️ {product.quantity || 'Weight N/A'}
+                    </div>
+                    <div style={{ 
+                        padding: '0.5rem 0.8rem', 
+                        borderRadius: '12px', 
+                        background: 'rgba(245,158,11,0.06)', 
+                        color: '#fcd34d', 
+                        fontSize: '0.75rem', 
+                        fontWeight: '800', 
+                        border: '1px solid rgba(245,158,11,0.15)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '0.4rem'
+                    }}>
+                        💰 {product.price && product.price !== 'N/A' ? `Verified ${product.price}` : 'Price N/A'}
+                    </div>
                 </div>
+            </div>
+            {/* View Toggle */}
+            <div style={{ display: 'flex', background: 'rgba(255,255,255,0.04)', borderRadius: '12px', padding: '0.25rem', border: '1px solid rgba(255,255,255,0.07)', alignSelf: 'flex-start' }}>
+                {[
+                    { key: 'list', Icon: List, label: 'List' },
+                    { key: 'summary', Icon: BarChart3, label: 'Summary' }
+                ].map(({ key, Icon, label }) => (
+                    <button key={key} onClick={() => setView(key)} style={{
+                        display: 'flex', alignItems: 'center', gap: '0.35rem', padding: '0.5rem 0.9rem',
+                        borderRadius: '10px', border: 'none', cursor: 'pointer', fontSize: '0.8rem', fontWeight: '700',
+                        background: view === key ? 'rgba(99,102,241,0.3)' : 'transparent',
+                        color: view === key ? '#818cf8' : '#64748b',
+                        transition: 'all 0.2s'
+                    }}>
+                        <Icon size={14} /> {label}
+                    </button>
+                ))}
             </div>
 
             {/* Allergen Warning */}
@@ -523,6 +565,13 @@ const IngredientBreakdown = ({ product }) => {
                             <p style={{ fontSize: '0.8rem', color: '#94a3b8', lineHeight: 1.65, margin: 0 }}>{ingredientText}</p>
                         </div>
                     )}
+                </div>
+            )}
+
+            {/* Multi-Platform Pricing Radar (High Fidelity) */}
+            {product?.pricing && (
+                <div style={{ marginTop: '2.5rem', borderTop: '1px solid rgba(255,255,255,0.05)', paddingTop: '2rem' }}>
+                    <PriceRadar pricing={product.pricing} />
                 </div>
             )}
 

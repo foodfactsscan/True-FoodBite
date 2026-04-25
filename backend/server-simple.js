@@ -1,5 +1,9 @@
 import dotenv from 'dotenv';
-dotenv.config();
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 import express from 'express';
 import cors from 'cors';
@@ -178,21 +182,23 @@ app.use((err, req, res, next) => {
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true';
 
 if (!isVercel) {
-    // Connect once at startup for local dev, then start listening
+    // Attempt DB connection but DO NOT block server start if it fails (Resilience Upgrade)
     connectDB()
         .then(() => {
-            app.listen(PORT, () => {
-                console.log(`\n✅ Server running on http://localhost:${PORT}`);
-                console.log(`📱 Frontend: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
-                if (!process.env.SMTP_USER) {
-                    console.log(`\n🔧 DEV MODE: OTP codes returned in API responses (no email needed)`);
-                }
-            });
+            console.log('✅ Background DB initialization successful.');
         })
         .catch((err) => {
-            console.error('Failed to start server:', err.message);
-            process.exit(1);
+            console.warn('⚠️ Server started in OFFLINE-DB mode. Core features (AI Pulse) will still work.');
+            console.error('❌ MongoDB Initial Connection Hint:', err.message);
         });
+
+    app.listen(PORT, () => {
+        console.log(`\n🚀 True FoodBite Server v2.0 - LIVE on http://localhost:${PORT}`);
+        console.log(`📱 Frontend: ${process.env.CLIENT_URL || 'http://localhost:5173'}`);
+        if (!process.env.SMTP_USER) {
+            console.log(`\n🔧 DEV MODE: OTP codes returned in API responses`);
+        }
+    });
 }
 
 export default app;

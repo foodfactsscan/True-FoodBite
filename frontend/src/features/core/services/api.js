@@ -229,6 +229,9 @@ const mergeProducts = (primary, secondary) => {
     if (!merged.additives_tags?.length && secondary.additives_tags?.length) merged.additives_tags = secondary.additives_tags;
     if (!merged.ingredients_analysis_tags?.length && secondary.ingredients_analysis_tags?.length) merged.ingredients_analysis_tags = secondary.ingredients_analysis_tags;
     if (!merged.quantity && secondary.quantity) merged.quantity = secondary.quantity;
+    if (secondary.price) merged.price = secondary.price;
+    if (secondary.pricing) merged.pricing = secondary.pricing;
+    if (secondary.ingredients_source) merged.ingredients_source = secondary.ingredients_source;
 
     // If primary nutrients are mostly 0 but secondary has data, use secondary
     const pNut = merged.nutriments || {};
@@ -249,7 +252,10 @@ const mergeProducts = (primary, secondary) => {
 export const getProductByBarcode = async (barcode) => {
     const cacheKey = `product_${barcode}`;
     const cached = getCached(cacheKey);
-    if (cached) return cached;
+    // Only return cache if it has EVERYTHING (price, etc.) - otherwise we need to refine
+    if (cached && cached.product && (cached.product.price && cached.product.price !== 'N/A')) {
+        return cached;
+    }
 
     console.log(`🔍 Searching for barcode: ${barcode}`);
 
@@ -287,6 +293,17 @@ export const getProductByBarcode = async (barcode) => {
         }
 
         if (bestProduct && hasGoodData(bestProduct)) {
+            console.log('🔄 Step 3: Triggering mandatory High-Fidelity Research Pulse (Price/Scientific)...');
+            try {
+                const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL || 
+                    (typeof window !== 'undefined' && !window.location.hostname.includes('localhost') && !window.location.hostname.includes('127.0.0.1') ? '' : 'http://localhost:5000');
+                const response = await quickFetch(`${BACKEND_URL}/api/products/${barcode}`, 8000);
+                if (response && response.status === 1 && response.product) {
+                    console.log('✨ Data refined via AI Research Pulse.');
+                    bestProduct = mergeProducts(bestProduct, response.product);
+                }
+            } catch (pErr) { console.warn('Refinement Pulse failed.'); }
+
             const normalized = normalizeProduct(bestProduct);
             const result = { status: 1, product: normalized };
             setCache(cacheKey, result);
